@@ -1,0 +1,14 @@
+[theme]
+base = "dark"
+primaryColor = "#8B5CF6"
+backgroundColor = "#0E0A18"
+secondaryBackgroundColor = "#17122A"
+textColor = "#ECE9F7"
+font = "sans serif"
+
+[server]
+# PropEdge's own port, so it never collides with ComplyForge on 8501
+port = 8502
+
+[browser]
+gatherUsageStats = false
