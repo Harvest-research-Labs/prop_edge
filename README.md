@@ -1,11 +1,18 @@
-# PropEdge
+# PropEdge — Smarter Betting
 
-A DailyFantasyFuel-style board for **PrizePicks** and **Underdog** pick'em props.
-It pulls live prop lines from both books, projects a hit probability for every
-line — **Goblins 🟢 and Demons 😈 included** — and ranks the best plays.
+An **AI brain** on top of **PrizePicks** and **Underdog** pick'em props. A quant
+model prices a hit probability for every line — **Goblins 🟢 and Demons 😈
+included** — and the brain then *reasons* over those prices to surface genuine
+value, flag traps, and build one disciplined slip.
 
 ## What it does
 
+- **🧠 Smart Board (the AI brain)** — reasons over the priced board and returns
+  ranked plays each with a verdict (**SMART / LEAN / THIN / TRAP / FADE**), a
+  slate strategy, and a recommended slip. Uses Claude when an `ANTHROPIC_API_KEY`
+  is present, with a deterministic heuristic fallback so it always works
+  (`model/brain.py`). Verdicts also badge every leg in Best Plays and Quick 6.
+  Grounded only in the lines actually loaded — it never invents a prop.
 - **Goblins & Demons board** — for every PrizePicks Goblin/Demon line, the
   projected probability the **Over** hits. Goblins are the safer (lower) lines;
   Demons are the juiced (higher) lines.
