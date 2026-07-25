@@ -100,28 +100,87 @@ def meter(label, pct, color):
 
 
 def css():
-    st.markdown("""<style>
-      .block-container{padding-top:1.4rem;max-width:1400px}
-      .ce-brand{font-weight:800;font-size:22px;letter-spacing:-.02em}
-      .ce-brand .mk{color:#9B6DFF}
-      .hero{background:linear-gradient(180deg,#1b1633,#14101f);border:1px solid #3a3059;border-left:4px solid #9B6DFF;
-        border-radius:16px;padding:20px 22px;margin-bottom:8px}
-      .hero h2{margin:2px 0;font-size:28px;font-weight:800;letter-spacing:-.02em}
-      .hero .mkt{color:#cfc9e2;font-weight:600;font-size:14px;margin-bottom:14px}
-      .hero .mkt b{color:#22D08A}
-      .pill{display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;border:1px solid}
-      .pcard{background:#15131F;border:1px solid #201C33;border-radius:13px;padding:13px 15px;height:100%}
-      .pcard .nm{font-weight:700;font-size:15px} .pcard .mo{font-size:12px;color:#948EAC;margin:2px 0 8px}
-      .tag{font-size:10px;font-weight:700;padding:2px 6px;border-radius:5px;color:#948EAC;background:#130f22;border:1px solid #2A2540;margin-right:6px}
-      .pbar{height:7px;border-radius:99px;background:#0d0a19;overflow:hidden;margin:6px 0 3px}
-      .pbar>div{height:100%;background:linear-gradient(90deg,#0f9e63,#22d08a)}
-      .avc{background:linear-gradient(180deg,#1c1420,#160f18);border:1px solid #3a2230;border-radius:12px;padding:11px 14px;margin-bottom:8px}
-      .avc .fl{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:99px;background:#ff5d6c18;color:#FF5D6C;border:1px solid #ff5d6c40}
-      .slipbox{background:#15131F;border:1px solid #201C33;border-radius:14px;padding:15px;position:sticky;top:12px}
-      .rowline{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;color:#948EAC}
-      .rowline b{color:#ECE9F7;font-family:ui-monospace,Menlo}
-      .disc{font-size:10.5px;color:#615B7E;margin-top:10px;line-height:1.4}
-      div[data-testid="stMetricValue"]{font-family:ui-monospace,Menlo}
+    st.markdown("""
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+    <style>
+      :root{
+        --bg:#0A0F1E; --surface:#111A2E; --surface2:#0D1424; --raise:#16203A;
+        --border:#1E2A44; --line:#26344F; --text:#E7EBF5; --muted:#8A93AD;
+        --purple:#9B6DFF; --purple-dim:#8B5CF6; --green:#22D08A; --blue:#4CB8F5;
+        --gold:#F4C445; --red:#FF5D6C;
+        --disp:'Sora',system-ui,sans-serif; --body:'IBM Plex Sans',system-ui,sans-serif;
+        --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+      }
+      /* ---- hide Streamlit chrome ---- */
+      #MainMenu, header[data-testid="stHeader"], [data-testid="stToolbar"], footer,
+      [data-testid="stDecoration"], .stDeployButton, [data-testid="stAppDeployButton"]{
+        display:none !important; visibility:hidden !important;}
+      /* ---- base typography + navy ---- */
+      html, body, .stApp, [class*="css"]{font-family:var(--body); color:var(--text);}
+      .stApp{background:radial-gradient(1200px 600px at 78% -8%, #142248 0%, var(--bg) 46%) fixed;}
+      h1,h2,h3,h4,.ce-brand{font-family:var(--disp);letter-spacing:-.02em;}
+      .block-container{padding-top:2.1rem;padding-bottom:3rem;max-width:1360px;}
+      [data-testid="stVerticalBlock"]{gap:.55rem;}
+      section[data-testid="stSidebar"]{background:#0B1120;border-right:1px solid var(--border);}
+      section[data-testid="stSidebar"] .block-container{padding-top:1.4rem;}
+      /* ---- brand ---- */
+      .ce-brand{font-weight:800;font-size:23px;}
+      .ce-brand .mk{color:var(--purple);}
+      /* ---- custom nav (restyled radio) ---- */
+      section[data-testid="stSidebar"] div[role="radiogroup"]{display:flex;flex-direction:column;gap:3px;}
+      section[data-testid="stSidebar"] div[role="radiogroup"] label{
+        display:flex;align-items:center;width:100%;margin:0;padding:9px 13px;border-radius:10px;
+        border:1px solid transparent;cursor:pointer;transition:background .12s,border-color .12s;}
+      section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child{display:none;}
+      section[data-testid="stSidebar"] div[role="radiogroup"] label:hover{background:var(--raise);}
+      section[data-testid="stSidebar"] div[role="radiogroup"] label p{
+        font-family:var(--disp);font-weight:600;font-size:15px;color:var(--muted);margin:0;}
+      section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked){
+        background:linear-gradient(90deg,rgba(139,92,246,.18),rgba(139,92,246,.04));
+        border-color:rgba(139,92,246,.40);box-shadow:inset 3px 0 0 var(--purple);}
+      section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p{color:#fff;}
+      /* ---- buttons ---- */
+      .stButton>button{border-radius:11px;font-family:var(--disp);font-weight:600;
+        border:1px solid var(--line);background:var(--surface);transition:all .12s;}
+      .stButton>button:hover{border-color:var(--purple);color:#fff;}
+      .stButton>button[kind="primary"]{background:linear-gradient(180deg,#9B6DFF,#7C4DE0);
+        border:0;box-shadow:0 6px 18px rgba(124,77,224,.35);}
+      /* ---- cards ---- */
+      .hero{background:linear-gradient(165deg,#16234A 0%,#0F1830 100%);
+        border:1px solid #2A3B63;box-shadow:inset 0 0 0 1px rgba(155,109,255,.06),0 10px 30px rgba(0,0,0,.35);
+        border-radius:16px;padding:18px 20px;margin-bottom:8px;position:relative;overflow:hidden;}
+      .hero:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;
+        background:linear-gradient(180deg,var(--purple),#5B8CFF);}
+      .hero h2{margin:3px 0;font-size:27px;font-weight:800;}
+      .hero .mkt{color:#C7D0E6;font-weight:500;font-size:13.5px;margin-bottom:14px;}
+      .hero .mkt b{color:var(--green);}
+      .pill{display:inline-block;font-family:var(--disp);font-size:10.5px;font-weight:700;
+        letter-spacing:.03em;padding:3px 10px;border-radius:99px;border:1px solid;}
+      .pcard{background:var(--surface);border:1px solid var(--border);border-radius:13px;
+        padding:12px 15px;height:100%;transition:border-color .12s,transform .12s;}
+      .pcard:hover{border-color:var(--line);transform:translateY(-1px);}
+      .pcard .nm{font-family:var(--disp);font-weight:700;font-size:15px;}
+      .pcard .mo{font-size:12px;color:var(--muted);margin:2px 0 8px;}
+      .tag{font-family:var(--mono);font-size:10px;font-weight:600;padding:2px 6px;border-radius:5px;
+        color:var(--muted);background:var(--surface2);border:1px solid var(--border);margin-right:6px;}
+      .pbar{height:7px;border-radius:99px;background:var(--surface2);overflow:hidden;margin:6px 0 3px;
+        border:1px solid var(--border);}
+      .pbar>div{height:100%;background:linear-gradient(90deg,#159C63,var(--green));}
+      .avc{background:var(--surface);border:1px solid #3A2436;border-radius:12px;padding:11px 14px;margin-bottom:8px;}
+      .avc .fl{font-family:var(--disp);font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:99px;
+        background:rgba(255,93,108,.10);color:var(--red);border:1px solid rgba(255,93,108,.30);}
+      .slipbox{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:15px;
+        position:sticky;top:12px;}
+      .rowline{display:flex;justify-content:space-between;font-size:13px;padding:3px 0;color:var(--muted);}
+      .rowline b{color:var(--text);font-family:var(--mono);}
+      .disc{font-size:10.5px;color:#5E6B86;margin-top:10px;line-height:1.45;}
+      /* ---- numbers / metrics / inputs ---- */
+      div[data-testid="stMetricValue"]{font-family:var(--mono);}
+      [data-baseweb="tag"]{background:rgba(139,92,246,.16) !important;border:1px solid rgba(139,92,246,.4) !important;
+        border-radius:8px !important;font-family:var(--disp);font-weight:600;}
+      [data-testid="stFileUploaderDropzone"]{background:var(--surface);border:1px dashed var(--line);border-radius:13px;}
     </style>""", unsafe_allow_html=True)
 
 
