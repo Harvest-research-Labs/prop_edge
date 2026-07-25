@@ -17,6 +17,8 @@ from model.projections import annotate
 from model import mlb_stats, matchup, brain, recommend, screenshot
 import storage
 from config import SUPPORTED_SPORTS
+from proedge_ui import (ranked_board, evaluate_slip, explain_board,
+                        extract_image, price_confirmed, api_available)
 
 st.set_page_config(page_title="ProEdge — Command Center", page_icon="🎯", layout="wide")
 
@@ -127,6 +129,15 @@ ss.setdefault("slip", [])
 ss.setdefault("view", "Card View")
 ss.setdefault("section", "Analyze")
 ss.setdefault("extracted", None)
+ss.setdefault("use_api", os.environ.get("PROEDGE_USE_API", "").lower() in ("1", "true", "yes"))
+
+
+def source_note(meta):
+    """Small badge telling the user where a result came from (api/local/fallback)."""
+    src = (meta or {}).get("source", "local")
+    label = {"api": "🟢 API gateway", "local": "🟡 Local model",
+             "local-fallback": "🟠 Local fallback (gateway down)"}.get(src, src)
+    st.caption(label + (" · " + "; ".join(meta.get("warnings", [])) if meta.get("warnings") else ""))
 
 
 def add_leg(pl):
@@ -156,6 +167,13 @@ with st.sidebar:
     with st.expander("🧰 Tools"):
         st.caption("Lottery Picker and batch tools live in the research app (`app.py`) — "
                    "kept separate from the sports workflow.")
+    ss.use_api = st.toggle("Route through API gateway", value=ss.use_api,
+                           help="Off = direct local model (fallback). On = FastAPI gateway (PROEDGE_API_URL).")
+    if ss.use_api:
+        st.caption("🟢 Gateway reachable" if api_available(True)
+                   else "🟠 Gateway unreachable — calls fall back to the local model.")
+    else:
+        st.caption("🟡 Local model (direct calls)")
     st.divider()
     st.caption("Model · last 7d")
     m1, m2 = st.columns(2)
@@ -170,11 +188,7 @@ if sports:
     except Exception as ex:  # noqa: BLE001
         st.warning(f"Couldn't fetch live lines ({ex}). Layout below is validated; connect data locally.")
 
-take = brain.get_take(rows, api_key=_key()) if rows else None
-plays = (take or {}).get("plays", []) if take else []
-best = next((p for p in plays if p["verdict"] in ("SMART", "LEAN")), plays[0] if plays else None)
-top5 = plays[:5]
-avoid = [p for p in plays if p["verdict"] in ("TRAP", "FADE")][:3]
+best, top5, avoid, plays, rank_meta = ranked_board(rows, ss.use_api)
 
 
 # ---------------------------------------------------------------- render pieces
@@ -255,29 +269,21 @@ def render_slip():
                     unsafe_allow_html=True)
         return
     legs = ss.slip
-    ps = [l["prob"] for l in legs if l.get("prob")]
-    naive = 1.0
-    for p in ps:
-        naive *= p
-    combined = recommend.combined_prob([{"prob": p} for p in ps]) if ps else 0
-    sports_in = [l.get("sport") for l in legs]
-    dup = len(sports_in) - len(set(sports_in))
-    adj = min(0.16, dup * 0.06)
-    corr_p = combined * (1 + adj * 0.55)
+    data, meta = evaluate_slip(legs, ss.use_api)
     w = weakest()
     rows_html = "".join(
         f'<div class="rowline"><span>{"⚠️ " if l is w and len(legs)>1 else ""}{l["player"]} · {l["stat"]}</span>'
         f'<b style="color:#22D08A">{round((l["prob"] or 0)*100)}%</b></div>' for l in legs)
-    risk = "Low" if corr_p > .45 else "Medium" if corr_p > .28 else "High"
     st.markdown(f"""<div class="slipbox">
       {rows_html}<hr style="border-color:#201C33;margin:10px 0">
-      <div class="rowline"><span>Naive combined</span><b>{round(naive*100)}%</b></div>
-      <div class="rowline"><span>Correlation-adj</span><b style="color:#22D08A">{round(corr_p*100)}%</b></div>
-      <div class="rowline"><span>Correlation</span><b>{"modeled +"+str(round(adj*100))+"%" if dup else "independent"}</b></div>
-      <div class="rowline"><span>Concentration</span><b>{"Med" if dup else "Low"}</b></div>
-      <div class="rowline"><span>Overall risk</span><b>{risk}</b></div>
-      <div class="disc">Estimate only. Correlation-adjusted combined shown alongside the naive figure so you always know whether correlation was modeled.</div>
+      <div class="rowline"><span>Naive combined</span><b>{round(data["naive_combined"]*100)}%</b></div>
+      <div class="rowline"><span>Correlation-adj</span><b style="color:#22D08A">{round(data["correlation_adjusted"]*100)}%</b></div>
+      <div class="rowline"><span>Correlation</span><b>{"modeled" if data["correlation_modeled"] else "independent"}</b></div>
+      <div class="rowline"><span>Concentration</span><b>{data["concentration"]}</b></div>
+      <div class="rowline"><span>Overall risk</span><b>{data["risk"]}</b></div>
+      <div class="disc">{data["correlation_note"]} · Estimate only; correlation-adjusted shown alongside naive so you always know whether correlation was modeled.</div>
     </div>""", unsafe_allow_html=True)
+    source_note(meta)
     b1, b2 = st.columns(2)
     if b1.button("Remove weakest", key="rmw", use_container_width=True) and len(legs) > 0:
         ss.slip.remove(w); st.rerun()
@@ -288,19 +294,23 @@ def render_slip():
 def render_ai():
     st.markdown("#### 🧠 ProEdge AI · analyst")
     st.caption("Explains the model — never invents a probability.")
-    for q in ["Why is this the best pick?", "What's my weakest leg?", "What changed from injuries?"]:
-        if st.button(q, key=f"ai_{q}", use_container_width=True):
-            if q.startswith("Why") and best:
-                st.info(f"**{best['player']}** tops the board: hit probability "
-                        f"{round((best.get('model_prob') or 0)*100)}%, confidence {best.get('confidence')}%. "
-                        f"{best.get('rationale','')}")
-            elif q.startswith("What's my weakest") and ss.slip:
-                w = weakest(); st.info(f"Weakest leg: **{w['player']} {w['stat']}** at "
-                                       f"{round((w['prob'] or 0)*100)}% — consider Replace w/ next-best.")
-            else:
-                st.info("Grounded in today's loaded board only. Load live lines to get a full read.")
-    st.text_input("Ask about your results…", key="ai_ask", label_visibility="collapsed",
-                  placeholder="Ask about your results…")
+    q = None
+    for label in ["Why is this the best pick?", "What's my weakest leg?", "Summarize today's board"]:
+        if st.button(label, key=f"ai_{label}", use_container_width=True):
+            q = label
+    typed = st.text_input("Ask about your results…", key="ai_ask", label_visibility="collapsed",
+                          placeholder="Ask about your results…")
+    if typed:
+        q = typed
+    if q:
+        if q.startswith("What's my weakest") and ss.slip:
+            w = weakest()
+            st.info(f"Weakest leg: **{w['player']} {w['stat']}** at {round((w['prob'] or 0)*100)}% "
+                    "— consider Replace w/ next-best.")
+        else:
+            data, meta = explain_board(rows, q, ss.use_api)
+            st.info(data.get("answer") or "No answer available for this board yet.")
+            source_note(meta)
 
 
 # ---------------------------------------------------------------- screenshot flow
@@ -316,13 +326,14 @@ def run_screenshot(file):
         for i, stg in enumerate(STAGES):
             st.write(f"{'✅' if i else '⏳'} {stg}")
             if stg == "Extracting picks":
-                try:
-                    picks = screenshot.extract_picks(file.getvalue(), file.type or "image/png", api_key=_key())
-                    st.write(f"　→ {len(picks)} pick(s) found")
-                except Exception as ex:  # noqa: BLE001
-                    s.update(label="Extraction needs attention", state="error")
-                    st.error(f"Couldn't read the slip: {ex}. Add an ANTHROPIC_API_KEY to enable vision extraction.")
+                picks, meta = extract_image(file.getvalue(), file.type or "image/png", ss.use_api)
+                if meta["status"] in ("error", "unavailable"):
+                    s.update(label="Extraction unavailable", state="error")
+                    st.error("Couldn't extract picks: " + "; ".join(meta.get("errors") or ["unknown error"]) +
+                             ("  ·  Set ANTHROPIC_API_KEY or start the API gateway."
+                              if meta["status"] == "unavailable" else ""))
                     return None
+                st.write(f"　→ {len(picks)} pick(s) found  ({meta['source']})")
         s.update(label="Analysis complete — confirm the picks below", state="complete")
         return picks
 
@@ -334,19 +345,20 @@ def render_confirm(picks):
                         "Line": p.get("line"), "Side": p.get("side", "more")} for p in picks])
     edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", key="confirm_ed")
     if st.button("Confirm all & price →", type="primary"):
-        lut = {(r.get("player"), r.get("stat")): r for r in rows}
-        added = 0
-        for _, r in edited.iterrows():
-            match = lut.get((r["Player"], r["Stat"]))
-            if match and match.get("hit_prob") is not None:
-                add_leg({"player": r["Player"], "stat": r["Stat"], "line": r["Line"],
-                         "side": r["Side"], "model_prob": match["hit_prob"],
-                         "flavor": match.get("flavor", "standard"), "sport": match.get("sport")})
-                added += 1
-        ss.extracted = None
-        st.success(f"Priced and added {added} of {len(edited)} picks to your slip. "
-                   f"{'Some picks could not be matched to a live line and were left unpriced.' if added < len(edited) else ''}")
-        st.rerun()
+        picks_in = [{"player": r["Player"], "stat": r["Stat"], "line": r["Line"],
+                     "side": r["Side"], "sport": None} for _, r in edited.iterrows()]
+        priced, needs_review, notes, meta = price_confirmed(picks_in, rows, ss.use_api)
+        for leg in priced:
+            add_leg({"player": leg["player"], "stat": leg["stat"], "line": leg.get("line"),
+                     "side": leg.get("side", "more"), "model_prob": leg["prob"],
+                     "flavor": leg.get("flavor", "standard"), "sport": leg.get("sport")})
+        ss.extracted = None   # confirmation consumed; rail slip (rendered after) reflects the adds
+        st.success(f"Priced and added {len(priced)} of {len(picks_in)} pick(s) to your slip.")
+        if needs_review:
+            st.warning(f"{len(needs_review)} pick(s) had low resolution confidence and were held for review.")
+        for n in notes:
+            st.info("Unpriced — " + n)
+        source_note(meta)
 
 
 # ---------------------------------------------------------------- sections
