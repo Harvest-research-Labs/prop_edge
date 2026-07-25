@@ -12,6 +12,7 @@ import os
 from config import canonical_stat
 from model import brain, recommend, screenshot
 from api import client
+from resolver.resolve import gate_mode
 
 
 def key():
@@ -145,21 +146,27 @@ def price_confirmed(picks, board_rows, use_api):
     confirm -> held for review, stop -> not priced. Uncovered sports keep the
     advisory board-match behavior.
     """
+    mode = gate_mode()                                  # off | advisory | required
     priced, needs_review, notes = [], [], []
     gate_by_key = {}
-    if use_api:
+    if use_api and mode != "off":
         d = (client.resolve(picks).get("data") or {})
         for r in (d.get("resolved", []) + d.get("needs_review", []) + d.get("unresolved", [])):
             gate_by_key[(r.get("player"), r.get("stat"))] = r
     for p in picks:
         r = gate_by_key.get((p.get("player"), p.get("stat")))
-        action = ((r or {}).get("gate") or {}).get("action", "advisory")
+        g = (r or {}).get("gate") or {}
+        action = g.get("action", "advisory")
+        covered = bool(r and r.get("league"))           # gate only bites covered MLB
         stat = (r.get("canonical_stat") if r else None) or p.get("stat")
-        if action == "confirm":                         # covered MLB, medium -> hold
-            needs_review.append(r); continue
-        if action == "stop":                            # covered MLB, low/no -> do not price
-            notes.append(f"{p.get('player')} · {stat} — {r['gate']['reason']}"); continue
-        # proceed (covered high) OR advisory (uncovered): price via board, else project+price
+        if mode == "required" and covered:
+            if action == "confirm":
+                needs_review.append(r); continue
+            if action == "stop":
+                notes.append(f"{p.get('player')} · {stat} — {g.get('reason')}"); continue
+        elif mode == "advisory" and covered and action in ("confirm", "stop"):
+            notes.append(f"advisory · {p.get('player')} · {stat} — {g.get('reason')}")  # warn, still price
+        # price via board, else project+price
         leg = _price_from_board(p, stat, board_rows)
         if leg:
             priced.append(leg); continue
@@ -175,4 +182,6 @@ def price_confirmed(picks, board_rows, use_api):
                 continue
         notes.append(f"{p.get('player')} · {stat} — unpriced (no live line matched)")
     status = "partial" if (needs_review or notes) else "ok"
-    return priced, needs_review, notes, _meta("api" if use_api else "local", status)
+    meta = _meta("api" if use_api else "local", status)
+    meta["gate_mode"] = mode
+    return priced, needs_review, notes, meta

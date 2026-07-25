@@ -1,10 +1,10 @@
-"""Entity resolution pipeline + schedule join + mandatory-gate.
+"""Entity resolution + schedule join + participation + mandatory gate.
 
-Order: canonical-ID -> exact name+league -> alias -> initial+surname ->
-team/opponent-constrained -> event-time-constrained -> fuzzy -> manual review.
-A real schedule join sets the matched event + verified opponent. Opponents are
-never inferred from a team name alone without a verified event.
+IDENTITY (who is this) is separate from PARTICIPATION (will they play). Pricing must
+never collapse the two. Covered = MLB (40-man). Opponents are only returned from a
+verified schedule event, never inferred from a team name alone.
 """
+import os
 import difflib
 import datetime
 
@@ -12,12 +12,27 @@ from config import canonical_stat
 from .normalize import normalize_name, as_initial_surname, canonical_team
 from .registry import get_registry
 
-SPORT_LEAGUE = {"MLB": "MLB"}   # first supported scope
+SPORT_LEAGUE = {"MLB": "MLB"}
 HIGH, MEDIUM = 0.90, 0.60
 
 
 def _now_iso():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def gate_mode():
+    """PROEDGE_MLB_RESOLUTION_GATE = off | advisory | required (default advisory)."""
+    m = os.environ.get("PROEDGE_MLB_RESOLUTION_GATE", "advisory").lower()
+    return m if m in ("off", "advisory", "required") else "advisory"
+
+
+def _recent(ts, now, hours=48):
+    try:
+        a = datetime.datetime.fromisoformat(ts)
+        b = datetime.datetime.fromisoformat(now)
+        return abs((b - a).total_seconds()) <= hours * 3600
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _aliases_for(reg, entity_id):
@@ -26,7 +41,6 @@ def _aliases_for(reg, entity_id):
 
 
 def _core(q, reg):
-    """Return (entity_row|None, confidence, method, warnings, candidates)."""
     warnings = []
     league = SPORT_LEAGUE.get((q.get("sport") or "").upper())
     if not league:
@@ -48,14 +62,12 @@ def _core(q, reg):
         candidate, base, method = exact[0], 0.97, "exact_name"
     elif len(exact) > 1:
         cands = exact
-
     if candidate is None and not cands:
         al = reg.find_by_alias(norm, league)
         if len(al) == 1:
             candidate, base, method = al[0], 0.90, "alias"
         elif len(al) > 1:
             cands = al
-
     if candidate is None and not cands:
         isur = as_initial_surname(player)
         if isur:
@@ -64,7 +76,6 @@ def _core(q, reg):
                 candidate, base, method = ini[0], 0.90, "initial_surname"
             elif len(ini) > 1:
                 cands = ini
-
     if candidate is None and cands:
         tid = reg.team_id_for(q.get("team")) if q.get("team") else None
         narrowed = [c for c in cands if tid and c["team_id"] == tid] if tid else []
@@ -78,9 +89,14 @@ def _core(q, reg):
         if q.get("team"):
             tid = reg.team_id_for(q["team"])
             if tid and candidate["team_id"] != tid:
-                conf, method = 0.55, "name_team_mismatch"
-                warnings.append(f"name matched but team '{q['team']}' != registry "
-                                f"team '{candidate['team_name']}'")
+                if candidate["previous_team_id"] == tid:
+                    conf, method = 0.85, "prev_team_history"
+                    warnings.append("screenshot team matches recent history, not the current "
+                                    "roster — confirm timing before pricing")
+                else:
+                    conf, method = 0.55, "name_team_mismatch"
+                    warnings.append(f"name matched but team '{q['team']}' != registry "
+                                    f"team '{candidate['team_name']}'")
         return candidate, conf, method, warnings, []
 
     if not cands:
@@ -104,12 +120,15 @@ def _core(q, reg):
 # --- schedule join ----------------------------------------------------------
 def _event_out(e, team_id):
     opp = e["away_team_id"] if e["home_team_id"] == team_id else e["home_team_id"]
+    warns = []
+    st = (e["event_status"] or "")
+    if st and st not in ("Scheduled", "Pre-Game", "Warmup", "In Progress", "Final", "Game Over"):
+        warns.append(f"event status '{st}' (postponed/suspended/rescheduled/cancelled) — verify")
     return {"event_id": e["event_id"], "opponent_id": opp,
-            "event_status": e["event_status"], "event_start": e["event_start"]}
+            "event_status": st or None, "event_start": e["event_start"]}, warns
 
 
 def _resolve_event(reg, team_id, q):
-    """Verify the event via the schedule; never infer opponent from a team alone."""
     warns = []
     out = {"event_id": None, "opponent_id": None, "event_status": None,
            "event_start": q.get("event_start")}
@@ -118,24 +137,26 @@ def _resolve_event(reg, team_id, q):
     if q.get("event_id"):
         r = reg.conn.execute("SELECT * FROM events WHERE event_id=?", (q["event_id"],)).fetchone()
         if r:
-            return _event_out(r, team_id), warns
+            o, w = _event_out(r, team_id); return o, w
         warns.append("provided event_id not found in schedule")
     date_prefix = (q.get("event_start") or "")[:10] or None
+    if not date_prefix:
+        return out, warns          # no date supplied -> don't guess an event / opponent
     evs = reg.find_events(team_id, date_prefix)
     if len(evs) == 1:
-        return _event_out(evs[0], team_id), warns
-    if len(evs) > 1:                       # doubleheader / multiple
+        o, w = _event_out(evs[0], team_id); return o, warns + w
+    if len(evs) > 1:
         gn = q.get("game_number")
         if gn:
             for e in evs:
                 if e["game_number"] == gn:
-                    return _event_out(e, team_id), warns
+                    o, w = _event_out(e, team_id); return o, warns + w
         warns.append("multiple events for team/date (doubleheader) — provide event_id or "
                      "game_number; opponent not inferred")
         return out, warns
     if date_prefix:
         warns.append("no scheduled event for team on that date — opponent not inferred "
-                     "(possible stale screenshot)")
+                     "(possible stale screenshot or start-time change)")
     return out, warns
 
 
@@ -144,25 +165,42 @@ def _registry_stale(reg, now, max_age_hours=48):
         return True
     last = reg.get_meta("last_successful_refresh")
     if not last:
-        return False   # seed/bootstrap only — not a stale backfill
+        return False
     try:
-        dt = datetime.datetime.fromisoformat(last)
-        n = datetime.datetime.fromisoformat(now)
-        return (n - dt).total_seconds() > max_age_hours * 3600
+        return (datetime.datetime.fromisoformat(now)
+                - datetime.datetime.fromisoformat(last)).total_seconds() > max_age_hours * 3600
     except Exception:  # noqa: BLE001
         return False
 
 
-def gate(sport, status, has_entity):
-    """Mandatory-gate decision for pricing (only meaningful for covered leagues)."""
+def _participation(entity, now):
+    """-> (participation_confidence, participation_status). Identity-independent."""
+    if entity is None:
+        return None, None
+    if entity["injury_status"]:
+        return 0.20, "injured_list"
+    if not entity["active"]:
+        return 0.35, "not_on_active_roster"
+    if entity["previous_team_id"] and entity["status_updated_at"] \
+            and _recent(entity["status_updated_at"], now):
+        return 0.70, "recently_activated_or_moved"
+    return 0.95, "active"
+
+
+def gate(sport, status, participation_conf, injured):
     league = SPORT_LEAGUE.get((sport or "").upper())
     if not league:
         return {"action": "advisory", "reason": f"'{sport or 'unknown'}' not a covered league — advisory only"}
-    if status == "resolved":
-        return {"action": "proceed", "reason": "covered MLB entity, high confidence"}
-    if status == "needs_review":
-        return {"action": "confirm", "reason": "covered MLB entity, medium confidence — confirm before pricing"}
-    return {"action": "stop", "reason": "covered MLB entity, low/no confidence — do not price"}
+    if status != "resolved":
+        return {"action": "confirm" if status == "needs_review" else "stop",
+                "reason": f"identity {status}"}
+    if injured or (participation_conf is not None and participation_conf < 0.30):
+        return {"action": "stop",
+                "reason": "verified IL/inactive — do not price unless a current participation source confirms availability"}
+    if participation_conf is not None and participation_conf < 0.90:
+        return {"action": "confirm",
+                "reason": "uncertain participation (recent move / not on active roster) — confirm before pricing"}
+    return {"action": "proceed", "reason": "high identity + acceptable participation"}
 
 
 def resolve_pick(pick, reg=None, now=None, registry_stale=None):
@@ -171,23 +209,19 @@ def resolve_pick(pick, reg=None, now=None, registry_stale=None):
     q = dict(pick)
     entity, conf, method, warns, cands = _core(q, reg)
 
-    # stale-screenshot / roster-move signal
-    if entity is not None and (entity["active"] == 0):
-        warns.append("player not on the current active roster — possible stale screenshot or roster move")
-        conf = min(conf, 0.75)
-        method = (method or "") + "+inactive"
+    part_conf, part_status = _participation(entity, now)
+    injured = bool(entity and entity["injury_status"]) if entity is not None else False
+    if injured:
+        warns.append(f"participation: {entity['injury_status']} — high identity, low participation")
 
-    # real schedule join (verified event + opponent)
     event = {"event_id": q.get("event_id"), "opponent_id": None,
              "event_status": None, "event_start": q.get("event_start")}
     if entity is not None:
         ev, ewarn = _resolve_event(reg, entity["team_id"], q)
-        event.update(ev)
-        warns += ewarn
+        event.update(ev); warns += ewarn
     if q.get("opponent") and event["opponent_id"] is None:
         warns.append("opponent provided but no verified event — not used as authoritative")
 
-    # upstream staleness
     if registry_stale is None:
         registry_stale = _registry_stale(reg, now)
     if registry_stale:
@@ -196,7 +230,8 @@ def resolve_pick(pick, reg=None, now=None, registry_stale=None):
 
     if conf >= HIGH:
         status = "needs_review" if method.startswith("name_team_mismatch") else "resolved"
-    elif conf >= MEDIUM or method.startswith(("ambiguous", "name_team_mismatch", "fuzzy")):
+    elif conf >= MEDIUM or method.startswith(("ambiguous", "name_team_mismatch", "fuzzy",
+                                              "prev_team_history")):
         status = "needs_review"
     else:
         status = "unresolved"
@@ -210,10 +245,15 @@ def resolve_pick(pick, reg=None, now=None, registry_stale=None):
         "league": SPORT_LEAGUE.get((q.get("sport") or "").upper()),
         "team_id": entity["team_id"] if entity else (reg.team_id_for(q.get("team")) if q.get("team") else None),
         "team_name": entity["team_name"] if entity else canonical_team(q.get("team")),
+        "current_team_id": entity["current_team_id"] if entity else None,
+        "previous_team_id": entity["previous_team_id"] if entity else None,
         "position": entity["position"] if entity else None,
         "jersey_number": entity["jersey_number"] if entity else None,
         "active": bool(entity["active"]) if entity is not None else None,
+        "eligible": bool(entity["eligible"]) if entity is not None else None,
         "roster_status": entity["roster_status"] if entity else None,
+        "injury_status": entity["injury_status"] if entity else None,
+        "transaction_status": entity["transaction_status"] if entity else None,
         "opponent_id": event["opponent_id"],
         "event_id": event["event_id"],
         "event_start": event["event_start"],
@@ -222,14 +262,15 @@ def resolve_pick(pick, reg=None, now=None, registry_stale=None):
         "source": entity["source"] if entity else None,
         "source_updated_at": entity["source_updated_at"] if entity else None,
         "resolution_confidence": round(conf, 3),
+        "participation_confidence": (round(part_conf, 3) if part_conf is not None else None),
+        "participation_status": part_status,
         "resolution_method": method,
         "needs_review": status != "resolved",
         "warnings": warns,
         "status": status,
         "registry_stale": bool(registry_stale),
-        "gate": gate(q.get("sport"), status, entity is not None),
+        "gate": gate(q.get("sport"), status, part_conf, injured),
         "candidates": cands,
-        # carried through for pricing (compatible with the UI)
         "player": entity["display_name"] if entity else q.get("player"),
         "stat": q.get("stat"),
         "canonical_stat": canonical_stat(q.get("stat") or ""),

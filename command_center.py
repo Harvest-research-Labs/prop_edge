@@ -19,6 +19,7 @@ import storage
 from config import SUPPORTED_SPORTS
 from proedge_ui import (ranked_board, evaluate_slip, explain_board,
                         extract_image, price_confirmed, api_available)
+from resolver.resolve import gate_mode
 
 st.set_page_config(page_title="ProEdge — Command Center", page_icon="🎯", layout="wide")
 
@@ -174,6 +175,9 @@ with st.sidebar:
                    else "🟠 Gateway unreachable — calls fall back to the local model.")
     else:
         st.caption("🟡 Local model (direct calls)")
+    _gm = gate_mode()
+    st.caption(f"MLB resolution gate: **{_gm}**"
+               + ("" if _gm != "advisory" else " (warns, doesn't block)"))
     st.divider()
     st.caption("Model · last 7d")
     m1, m2 = st.columns(2)

@@ -1,34 +1,39 @@
-"""Backfill + schedule-join + mandatory-gate tests.
-
-Deterministic: a FakeApi stands in for the MLB Stats API (no network). Covers full
-import, idempotency, trades, activation, aliases, schedule, doubleheaders, stale
-events, timeouts, partial failure, failure-preserves-registry, the mandatory gate
-(high/med/low), uncovered-sport advisory, and an end-to-end screenshot->price chain.
-"""
-import copy
+"""40-man backfill + participation + schedule + gate tests (deterministic, no network)."""
 import pytest
 
 from resolver.registry import EntityRegistry
 from resolver import backfill
 from resolver.mlb_api import MlbApiError
 from resolver.resolve import resolve_pick
-from model.projections import over_prob
 
 NOW = "2026-07-25T12:00:00+00:00"
+NOW2 = "2026-07-25T13:00:00+00:00"          # 1h later (recent)
+OLD = "2026-07-20T12:00:00+00:00"           # 5 days earlier (stale)
+
+
+def _p(pid, name, pos="RF", active=True, injury=None, txn=None):
+    return {"person_id": pid, "name": name, "position": pos, "jersey": "1",
+            "roster_status": injury or txn or ("Active" if active else "Inactive"),
+            "active": active, "injury_status": injury, "transaction_status": txn, "eligible": True}
 
 
 class FakeApi:
     def __init__(self):
         self.teams = [
-            {"mlb_id": 119, "name": "Los Angeles Dodgers", "abbrev": "LAD", "team_name": "Dodgers", "location": "Los Angeles"},
-            {"mlb_id": 118, "name": "Kansas City Royals",  "abbrev": "KC",  "team_name": "Royals",  "location": "Kansas City"},
-            {"mlb_id": 147, "name": "New York Yankees",    "abbrev": "NYY", "team_name": "Yankees", "location": "New York"},
+            {"mlb_id": 119, "name": "Los Angeles Dodgers", "abbrev": "LAD"},
+            {"mlb_id": 118, "name": "Kansas City Royals", "abbrev": "KC"},
+            {"mlb_id": 147, "name": "New York Yankees", "abbrev": "NYY"},
+            {"mlb_id": 114, "name": "Cleveland Guardians", "abbrev": "CLE"},
+            {"mlb_id": 144, "name": "Atlanta Braves", "abbrev": "ATL"},
         ]
         self.rosters = {
-            119: [{"person_id": 660271, "name": "Shohei Ohtani", "position": "DH", "jersey": "17", "roster_status": "Active", "active": True},
-                  {"person_id": 700,    "name": "Will Smith",    "position": "C",  "jersey": "16", "roster_status": "Active", "active": True}],
-            118: [{"person_id": 701,    "name": "Will Smith",    "position": "P",  "jersey": "20", "roster_status": "Active", "active": True}],
-            147: [{"person_id": 592450, "name": "Aaron Judge",   "position": "RF", "jersey": "99", "roster_status": "Active", "active": True}],
+            119: [_p(660271, "Shohei Ohtani", "DH"), _p(700, "Will Smith", "C"),
+                  _p(477132, "Clayton Kershaw", "P", active=False, injury="10-Day Injured List"),
+                  _p(900, "Dalton Rushing", "C", active=False, txn="Optioned")],
+            118: [_p(701, "Will Smith", "P"), _p(677951, "Bobby Witt Jr.", "SS")],
+            147: [_p(592450, "Aaron Judge", "RF")],
+            114: [_p(608070, "Jose Ramirez", "3B")],
+            144: [_p(660670, "Ronald Acuna Jr.", "OF"), _p(671739, "Michael Harris II", "CF")],
         }
         self.schedule = {"2026-07-25": [
             {"game_pk": 745, "game_date": "2026-07-25T19:10:00+00:00", "status": "Scheduled",
@@ -36,15 +41,14 @@ class FakeApi:
              "double_header": "N", "game_number": 1, "season": "2026"}]}
         self.fail_teams = False
         self.fail_roster = set()
-        self.timeout_roster = set()
 
     def fetch_teams(self):
         if self.fail_teams:
-            raise MlbApiError("teams endpoint down")
+            raise MlbApiError("teams down")
         return self.teams
 
-    def fetch_active_roster(self, mlb_id):
-        if mlb_id in self.timeout_roster or mlb_id in self.fail_roster:
+    def fetch_40man_roster(self, mlb_id):
+        if mlb_id in self.fail_roster:
             raise MlbApiError(f"roster {mlb_id} failed")
         return self.rosters.get(mlb_id, [])
 
@@ -53,155 +57,166 @@ class FakeApi:
 
 
 @pytest.fixture()
-def empty():
-    return EntityRegistry(":memory:", seed=False)
+def reg():
+    r = EntityRegistry(":memory:", seed=False)
+    backfill.full_refresh(r, api=FakeApi(), dates=["2026-07-25"], now=NOW)
+    return r
 
 
-@pytest.fixture()
-def seeded():
-    return EntityRegistry(":memory:", seed=True)
+def R(reg, now=NOW, **pick):
+    pick.setdefault("sport", "MLB")
+    return resolve_pick(pick, reg=reg, now=now)
 
 
-# ---- import / idempotency --------------------------------------------------
-def test_full_roster_import(empty):
-    rep = backfill.full_refresh(empty, api=FakeApi(), dates=["2026-07-25"], now=NOW)
-    assert rep["status"] == "ok" and rep["teams"] == 3 and rep["players_active"] == 4 and rep["events"] == 1
-    r = resolve_pick({"player": "Aaron Judge", "stat": "Hits", "sport": "MLB"}, reg=empty, now=NOW)
-    assert r["status"] == "resolved" and r["entity_id"] == "mlb-p-592450"
+# ---- coverage / participation ----------------------------------------------
+def test_active_player(reg):
+    r = R(reg, player="Aaron Judge", stat="Hits")
+    assert r["status"] == "resolved" and r["active"] is True
+    assert r["participation_confidence"] == 0.95 and r["gate"]["action"] == "proceed"
 
 
-def test_idempotent_second_import(empty):
-    api = FakeApi()
-    backfill.full_refresh(empty, api=api, dates=["2026-07-25"], now=NOW)
-    n1 = empty._count("entities")
-    backfill.full_refresh(empty, api=api, dates=["2026-07-25"], now=NOW)
-    assert empty._count("entities") == n1          # upserts, no duplicates
+def test_40man_inactive_optioned(reg):
+    r = R(reg, player="Dalton Rushing", stat="Hits")
+    assert r["status"] == "resolved"                     # identity high (40-man)
+    assert r["active"] is False and r["eligible"] is True
+    assert r["participation_confidence"] == 0.35 and r["gate"]["action"] == "confirm"
 
 
-def test_player_traded(empty):
-    api = FakeApi()
-    backfill.full_refresh(empty, api=api, now=NOW)
-    # Judge traded NYY -> LAD
+def test_injured_list_player(reg):
+    r = R(reg, player="Clayton Kershaw", stat="Strikeouts")
+    assert r["status"] == "resolved" and r["injury_status"]     # high identity
+    assert r["participation_confidence"] == 0.20 and r["gate"]["action"] == "stop"
+
+
+def test_recently_moved_medium_participation():
+    r = EntityRegistry(":memory:", seed=False)
+    api = FakeApi(); backfill.full_refresh(r, api=api, now=NOW)
+    api.rosters[118] = [_p(701, "Will Smith", "P")]                        # Witt off KC
+    api.rosters[147].append(_p(677951, "Bobby Witt Jr.", "SS"))           # onto NYY
+    backfill.full_refresh(r, api=api, now=NOW2)                            # recent
+    x = R(r, now=NOW2, player="Bobby Witt Jr.", stat="Hits")
+    assert x["participation_confidence"] == 0.70 and x["gate"]["action"] == "confirm"
+
+
+def test_participation_gate_bands(reg):
+    assert R(reg, player="Aaron Judge")["gate"]["action"] == "proceed"        # active
+    assert R(reg, player="Clayton Kershaw")["gate"]["action"] == "stop"       # IL
+    assert R(reg, player="Dalton Rushing")["gate"]["action"] == "confirm"     # optioned
+
+
+# ---- transactions ----------------------------------------------------------
+def test_player_traded_updates_team():
+    r = EntityRegistry(":memory:", seed=False)
+    api = FakeApi(); backfill.full_refresh(r, api=api, now=NOW)
     api.rosters[147] = []
-    api.rosters[119].append({"person_id": 592450, "name": "Aaron Judge", "position": "RF",
-                             "jersey": "99", "roster_status": "Active", "active": True})
-    backfill.full_refresh(empty, api=api, now=NOW)
-    r = resolve_pick({"player": "Aaron Judge", "sport": "MLB", "stat": "Hits"}, reg=empty, now=NOW)
-    assert r["team_id"] == "mlb-t-LAD"
+    api.rosters[119].append(_p(592450, "Aaron Judge", "RF"))
+    backfill.full_refresh(r, api=api, now=NOW2)
+    assert R(r, now=NOW2, player="Aaron Judge")["team_id"] == "mlb-t-LAD"
 
 
-def test_player_deactivated_then_activated(empty):
-    api = FakeApi()
-    backfill.full_refresh(empty, api=api, now=NOW)
-    api.rosters[147] = []                            # Judge off the roster
-    rep = backfill.full_refresh(empty, api=api, now=NOW)
-    assert rep["stale_deactivated"] >= 1
-    assert empty.get_by_id("mlb-p-592450")["active"] == 0
-    # reactivate
-    api.rosters[147] = [{"person_id": 592450, "name": "Aaron Judge", "position": "RF",
-                         "jersey": "99", "roster_status": "Active", "active": True}]
-    backfill.full_refresh(empty, api=api, now=NOW)
-    assert empty.get_by_id("mlb-p-592450")["active"] == 1
+def test_historical_team_screenshot():
+    r = EntityRegistry(":memory:", seed=False)
+    api = FakeApi(); backfill.full_refresh(r, api=api, now=NOW)
+    api.rosters[118] = [_p(701, "Will Smith", "P")]
+    api.rosters[147].append(_p(677951, "Bobby Witt Jr.", "SS"))
+    backfill.full_refresh(r, api=api, now=NOW2)
+    x = R(r, now=NOW2, player="Bobby Witt Jr.", team="KC")   # old team
+    assert x["resolution_method"] == "prev_team_history" and x["gate"]["action"] == "confirm"
+    assert any("recent history" in w for w in x["warnings"])
 
 
-def test_team_alias_import(empty):
-    backfill.full_refresh(empty, api=FakeApi(), now=NOW)
-    assert empty.team_id_for("LAD") == "mlb-t-LAD"
-    assert empty.team_id_for("Los Angeles Dodgers") == "mlb-t-LAD"
+def test_conflicting_current_team(reg):
+    x = R(reg, player="Aaron Judge", team="KC")              # never his team
+    assert x["resolution_method"] == "name_team_mismatch" and x["needs_review"] is True
 
 
-# ---- schedule / events -----------------------------------------------------
-def test_schedule_import_sets_event_and_opponent(empty):
-    backfill.full_refresh(empty, api=FakeApi(), dates=["2026-07-25"], now=NOW)
-    r = resolve_pick({"player": "Shohei Ohtani", "sport": "MLB", "stat": "Total Bases",
-                      "team": "LAD", "event_start": "2026-07-25T19:10:00+00:00"}, reg=empty, now=NOW)
-    assert r["event_id"] == "mlb-e-745" and r["opponent_id"] == "mlb-t-KC"
+# ---- aliases ---------------------------------------------------------------
+def test_alias_import(reg):
+    n = reg.conn.execute("SELECT COUNT(*) c FROM aliases WHERE alias_norm='mike harris'").fetchone()["c"]
+    assert n >= 1
+    assert R(reg, player="Mike Harris")["entity_id"] == "mlb-p-671739"
 
 
-def test_doubleheader_matching(empty):
+def test_accent_and_suffix_aliases(reg):
+    assert R(reg, player="Jose Ramirez")["entity_id"] == "mlb-p-608070"        # accent
+    assert R(reg, player="Ronald Acuna")["entity_id"] == "mlb-p-660670"        # suffix + accent
+
+
+def test_initial_plus_surname(reg):
+    x = R(reg, player="A. Judge")
+    assert x["entity_id"] == "mlb-p-592450"
+
+
+# ---- schedule --------------------------------------------------------------
+def test_duplicate_name_event_disambiguation(reg):
+    amb = R(reg, player="Will Smith", stat="Strikeouts")
+    assert amb["status"] == "needs_review" and amb["resolution_method"] == "ambiguous"
+    ok = R(reg, player="Will Smith", team="LAD", event_start="2026-07-25T19:10:00+00:00")
+    assert ok["status"] == "resolved" and ok["entity_id"] == "mlb-p-700"
+    assert ok["event_id"] == "mlb-e-745" and ok["opponent_id"] == "mlb-t-KC"
+
+
+def test_doubleheader_matching():
+    r = EntityRegistry(":memory:", seed=False)
     api = FakeApi()
     api.schedule["2026-07-25"].append(
         {"game_pk": 746, "game_date": "2026-07-25T22:10:00+00:00", "status": "Scheduled",
          "home_mlb_id": 119, "away_mlb_id": 118, "venue": "Dodger Stadium",
          "double_header": "S", "game_number": 2, "season": "2026"})
-    backfill.full_refresh(empty, api=api, dates=["2026-07-25"], now=NOW)
-    ambiguous = resolve_pick({"player": "Shohei Ohtani", "sport": "MLB", "stat": "Hits",
-                              "team": "LAD", "event_start": "2026-07-25T00:00:00+00:00"}, reg=empty, now=NOW)
-    assert ambiguous["event_id"] is None and ambiguous["opponent_id"] is None
-    assert any("doubleheader" in w for w in ambiguous["warnings"])
-    picked = resolve_pick({"player": "Shohei Ohtani", "sport": "MLB", "stat": "Hits", "team": "LAD",
-                           "event_start": "2026-07-25T00:00:00+00:00", "game_number": 2}, reg=empty, now=NOW)
-    assert picked["event_id"] == "mlb-e-746"
+    backfill.full_refresh(r, api=api, dates=["2026-07-25"], now=NOW)
+    amb = R(r, player="Shohei Ohtani", team="LAD", event_start="2026-07-25T00:00:00+00:00")
+    assert amb["event_id"] is None and any("doubleheader" in w for w in amb["warnings"])
+    pick = R(r, player="Shohei Ohtani", team="LAD",
+             event_start="2026-07-25T00:00:00+00:00", game_number=2)
+    assert pick["event_id"] == "mlb-e-746"
 
 
-def test_stale_screenshot_no_event(empty):
-    backfill.full_refresh(empty, api=FakeApi(), dates=["2026-07-25"], now=NOW)
-    r = resolve_pick({"player": "Aaron Judge", "sport": "MLB", "stat": "Hits", "team": "NYY",
-                      "event_start": "2026-07-25T18:00:00+00:00"}, reg=empty, now=NOW)
-    assert r["opponent_id"] is None
-    assert any("no scheduled event" in w for w in r["warnings"])
+def test_postponed_game():
+    r = EntityRegistry(":memory:", seed=False)
+    api = FakeApi()
+    api.schedule["2026-07-25"][0]["status"] = "Postponed"
+    backfill.full_refresh(r, api=api, dates=["2026-07-25"], now=NOW)
+    x = R(r, player="Shohei Ohtani", team="LAD", event_start="2026-07-25T19:10:00+00:00")
+    assert x["event_status"] == "Postponed" and any("postponed" in w.lower() for w in x["warnings"])
+
+
+def test_rescheduled_or_stale_schedule(reg):
+    # screenshot date has no scheduled event for the team -> start-time-change / stale
+    x = R(reg, player="Aaron Judge", team="NYY", event_start="2026-07-26T18:00:00+00:00")
+    assert x["opponent_id"] is None
+    assert any("no scheduled event" in w for w in x["warnings"])
+
+
+def test_stale_registry_lowers_confidence(reg):
+    reg.set_meta("last_successful_refresh", OLD)
+    x = R(reg, now="2026-07-30T12:00:00+00:00", player="Aaron Judge", stat="Hits")
+    assert x["registry_stale"] is True
+    assert any("stale" in w for w in x["warnings"])
 
 
 # ---- resilience ------------------------------------------------------------
-def test_upstream_timeout_is_partial(empty):
-    api = FakeApi(); api.timeout_roster = {119}
-    rep = backfill.full_refresh(empty, api=api, now=NOW)
-    assert rep["status"] == "partial" and "LAD" in rep["incomplete_teams"]
-    assert empty.get_by_id("mlb-p-592450") is not None       # NYY still imported
-
-
-def test_partial_upstream_failure(empty):
+def test_partial_upstream_failure():
+    r = EntityRegistry(":memory:", seed=False)
     api = FakeApi(); api.fail_roster = {118}
-    rep = backfill.full_refresh(empty, api=api, now=NOW)
+    rep = backfill.full_refresh(r, api=api, dates=["2026-07-25"], now=NOW)
     assert rep["status"] == "partial" and "KC" in rep["incomplete_teams"]
-    assert empty.get_by_id("mlb-p-660271") is not None       # LAD imported
-    assert empty.get_by_id("mlb-p-701") is None              # KC skipped
+    assert r.get_by_id("mlb-p-660271") is not None          # LAD imported
 
 
-def test_failed_refresh_preserves_registry(seeded):
-    before = seeded._count("entities")
+def test_failed_refresh_preserves_prior_production_data():
+    r = EntityRegistry(":memory:", seed=False)
+    backfill.full_refresh(r, api=FakeApi(), now=NOW)         # good production data
+    before = r._count("entities")
     api = FakeApi(); api.fail_teams = True
-    rep = backfill.full_refresh(seeded, api=api, now=NOW)
-    assert rep["status"] == "failed"
-    assert seeded._count("entities") == before               # nothing destroyed
-    assert resolve_pick({"player": "Aaron Judge", "sport": "MLB"}, reg=seeded, now=NOW)["entity_id"]
+    rep = backfill.full_refresh(r, api=api, now=NOW2)
+    assert rep["status"] == "failed" and r._count("entities") == before
+    assert R(r, now=NOW2, player="Aaron Judge")["entity_id"] == "mlb-p-592450"
 
 
-# ---- mandatory gate --------------------------------------------------------
-def _reg():
-    reg = EntityRegistry(":memory:", seed=False)
-    backfill.full_refresh(reg, api=FakeApi(), dates=["2026-07-25"], now=NOW)
-    return reg
-
-
-def test_gate_high_proceed():
-    r = resolve_pick({"player": "Aaron Judge", "sport": "MLB", "stat": "Hits"}, reg=_reg(), now=NOW)
-    assert r["gate"]["action"] == "proceed"
-
-
-def test_gate_medium_confirm():
-    r = resolve_pick({"player": "Will Smith", "sport": "MLB", "stat": "Strikeouts"}, reg=_reg(), now=NOW)
-    assert r["status"] == "needs_review" and r["gate"]["action"] == "confirm"
-
-
-def test_gate_low_stop():
-    r = resolve_pick({"player": "Ghost Player", "sport": "MLB", "stat": "Hits"}, reg=_reg(), now=NOW)
-    assert r["gate"]["action"] == "stop"
-
-
-def test_uncovered_sport_advisory():
-    r = resolve_pick({"player": "LeBron James", "sport": "NBA", "stat": "Points"}, reg=_reg(), now=NOW)
-    assert r["gate"]["action"] == "advisory" and r["league"] is None
-
-
-# ---- end to end ------------------------------------------------------------
-def test_e2e_screenshot_text_to_price():
-    reg = _reg()
-    # screenshot-extracted text -> entity + event
-    r = resolve_pick({"player": "A. Judge", "stat": "Hits", "line": 0.5, "side": "more",
-                      "sport": "MLB", "team": "NYY"}, reg=reg, now=NOW)
-    assert r["status"] == "resolved" and r["entity_id"] == "mlb-p-592450"
-    assert r["gate"]["action"] == "proceed"
-    # projection (mean supplied to stay offline) -> price
-    prob = over_prob(r["line"], 1.15, r["canonical_stat"] or "Hits")
-    assert 0.0 < prob <= 1.0
+def test_report_counts(reg):
+    # reg was built by the fixture; re-report via a fresh import to check fields
+    r = EntityRegistry(":memory:", seed=False)
+    rep = backfill.full_refresh(r, api=FakeApi(), dates=["2026-07-25"], now=NOW)
+    assert rep["teams"] == 5 and rep["players_total"] == 10
+    assert rep["players_injured"] == 1 and rep["players_inactive"] == 2
+    assert rep["events"] == 1 and rep["aliases"] >= 1

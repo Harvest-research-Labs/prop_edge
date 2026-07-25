@@ -41,6 +41,9 @@ def test_extract_no_key_is_not_fabricated():
 
 
 def test_resolve_uses_registry():
+    # Isolate from whatever the on-disk registry currently holds (live backfill, etc.)
+    import resolver.registry as rreg
+    rreg._singleton = rreg.EntityRegistry(":memory:", seed=True)
     j = client.post("/resolve", json={"picks": [
         {"player": "Aaron Judge", "stat": "Hits", "line": 0.5, "sport": "MLB"},
         {"player": "", "stat": "Points", "line": 25.5, "sport": "NBA"}]}).json()

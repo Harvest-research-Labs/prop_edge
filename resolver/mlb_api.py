@@ -71,6 +71,40 @@ def fetch_active_roster(mlb_team_id):
     return [p for p in out if p["person_id"] and p["name"]]
 
 
+def _classify_status(code, desc):
+    """-> (active, injury_status, transaction_status, eligible)."""
+    d = (desc or "").lower()
+    active = code == "A" or d == "active"
+    injury = desc if ("injured" in d or "disabled" in d) else None
+    txn = None
+    for k in ("optioned", "designated", "restricted", "suspended", "reassigned",
+              "released", "paternity", "bereavement", "outrighted"):
+        if k in d:
+            txn = desc
+            break
+    return active, injury, txn, True   # on the 40-man => eligible
+
+
+def fetch_40man_roster(mlb_team_id):
+    """-> [{person_id, name, position, jersey, roster_status, active, injury_status,
+    transaction_status, eligible}] for the full 40-man roster (incl. IL / optioned)."""
+    data = _get(f"{BASE}/teams/{mlb_team_id}/roster", params={"rosterType": "40Man"})
+    out = []
+    for r in data.get("roster", []):
+        person = r.get("person", {})
+        status = r.get("status", {})
+        code, desc = status.get("code"), status.get("description") or status.get("code")
+        active, injury, txn, eligible = _classify_status(code, desc)
+        out.append({
+            "person_id": person.get("id"), "name": person.get("fullName"),
+            "position": (r.get("position", {}) or {}).get("abbreviation"),
+            "jersey": r.get("jerseyNumber"), "roster_status": desc,
+            "active": active, "injury_status": injury,
+            "transaction_status": txn, "eligible": eligible,
+        })
+    return [p for p in out if p["person_id"] and p["name"]]
+
+
 def fetch_schedule(date):
     """date 'YYYY-MM-DD' -> [{game_pk, game_date, status, home_mlb_id, away_mlb_id,
     venue, double_header, game_number, season}]."""
