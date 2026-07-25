@@ -136,7 +136,9 @@ def price_confirmed(picks, board_rows, use_api):
     if use_api:
         rr = client.resolve(picks)
         if rr.get("data"):
-            items = rr["data"].get("resolved", picks)
+            # resolve is advisory this slice: never drop picks from pricing, but
+            # surface needs_review; prefer resolved records (they carry canonical fields).
+            items = rr["data"].get("resolved") or picks
             needs_review = rr["data"].get("needs_review", [])
     for p in items:
         player, stat = p.get("player"), p.get("canonical_stat") or p.get("platform_stat") or p.get("stat")

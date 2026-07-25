@@ -6,10 +6,11 @@ Unresolved / unsupported inputs are rejected or flagged, never fabricated.
 """
 import base64
 
-from config import canonical_stat
+from config import canonical_stat  # noqa: F401 - kept for compatibility
 from sources.base import devig_two_way
 from model.projections import over_prob
 from model import brain, recommend, screenshot
+from resolver.resolve import resolve_pick
 from . import core
 
 
@@ -47,22 +48,21 @@ def svc_extract(req):
 
 # ---- 2. resolve ------------------------------------------------------------
 def svc_resolve(req):
-    resolved, needs_review, warnings = [], [], []
+    """Real entity resolution against the canonical registry (MLB-first).
+    High confidence auto-resolves; medium -> needs_review; low/none -> unresolved.
+    """
+    resolved, needs_review, unresolved = [], [], []
     for p in req.picks:
-        if not (p.player or "").strip():
-            needs_review.append({**p.model_dump(), "reason": "missing player"})
-            continue
-        canon = canonical_stat(p.stat)
-        conf = 0.95 if canon else 0.45
-        item = {"player": p.player, "canonical_stat": canon, "platform_stat": p.stat,
-                "line": p.line, "side": p.side, "sport": p.sport, "team": p.team,
-                "opponent": p.opponent, "resolution_confidence": conf}
-        (resolved if conf >= 0.6 else needs_review).append(item)
-    warnings.append("Stat canonicalization only; full player/event resolution (rosters, IDs, "
-                    "disambiguation) is a later Phase-2 build.")
-    status = "partial" if needs_review else "ok"
-    return _reply({"resolved": resolved, "needs_review": needs_review},
-                  status=status, source="config.canonical_stat", warnings=warnings)
+        r = resolve_pick(p.model_dump())
+        {"resolved": resolved, "needs_review": needs_review}.get(r["status"], unresolved).append(r)
+    status = "ok" if not (needs_review or unresolved) else "partial"
+    conf = round(sum(r["resolution_confidence"] for r in resolved) / len(resolved), 3) if resolved else None
+    warnings = ["Only high-confidence (>=0.90) entities auto-resolve; medium -> needs_review, "
+                "low/none -> unresolved. None proceed silently into pricing.",
+                "Scope: MLB registry (seeded). Other sports return unresolved (unsupported_sport)."]
+    return _reply({"resolved": resolved, "needs_review": needs_review, "unresolved": unresolved},
+                  status=status, source="resolver (MLB seed registry)",
+                  warnings=warnings, confidence=conf)
 
 
 # ---- 3. project ------------------------------------------------------------

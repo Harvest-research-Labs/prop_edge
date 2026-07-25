@@ -33,6 +33,9 @@ class RawPickIn(BaseModel):
     sport: Optional[str] = None
     team: Optional[str] = None
     opponent: Optional[str] = None
+    event_id: Optional[str] = None
+    event_start: Optional[str] = None
+    entity_id: Optional[str] = None       # lets a user correction resolve exactly
 
 
 class ResolveRequest(BaseModel):

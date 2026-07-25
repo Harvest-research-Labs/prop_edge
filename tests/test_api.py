@@ -40,13 +40,15 @@ def test_extract_no_key_is_not_fabricated():
     assert j["errors"]
 
 
-def test_resolve_flags_missing_player():
+def test_resolve_uses_registry():
     j = client.post("/resolve", json={"picks": [
-        {"player": "Aaron Judge", "stat": "Hits", "line": 0.5},
-        {"player": "", "stat": "Points", "line": 25.5}]}).json()
+        {"player": "Aaron Judge", "stat": "Hits", "line": 0.5, "sport": "MLB"},
+        {"player": "", "stat": "Points", "line": 25.5, "sport": "NBA"}]}).json()
     _assert_envelope(j)
-    assert len(j["data"]["resolved"]) == 1
-    assert len(j["data"]["needs_review"]) == 1
+    res = j["data"]["resolved"]
+    assert len(res) == 1 and res[0]["entity_id"] == "mlb-p-judge"
+    assert res[0]["resolution_method"] == "exact_name" and res[0]["needs_review"] is False
+    assert len(j["data"]["unresolved"]) == 1        # NBA unsupported + empty player
     assert j["status"] == "partial"
 
 
