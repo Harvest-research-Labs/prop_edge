@@ -129,35 +129,50 @@ def _match_board(board_rows, player, stat):
     return None
 
 
+def _price_from_board(p, stat, board_rows):
+    m = _match_board(board_rows, p.get("player"), stat)
+    if m and m.get("hit_prob") is not None:
+        return {"player": p.get("player"), "stat": m.get("stat"), "line": p.get("line"),
+                "side": p.get("side", "more"), "prob": m["hit_prob"],
+                "flavor": m.get("flavor", "standard"), "sport": m.get("sport")}
+    return None
+
+
 def price_confirmed(picks, board_rows, use_api):
-    """picks: [{player,stat,line,side,sport?}] -> (priced_legs, needs_review, notes, meta)."""
+    """picks: [{player,stat,line,side,sport?}] -> (priced_legs, needs_review, notes, meta).
+
+    /resolve is a MANDATORY gate for covered MLB entities: proceed -> price,
+    confirm -> held for review, stop -> not priced. Uncovered sports keep the
+    advisory board-match behavior.
+    """
     priced, needs_review, notes = [], [], []
-    items = picks
+    gate_by_key = {}
     if use_api:
-        rr = client.resolve(picks)
-        if rr.get("data"):
-            # resolve is advisory this slice: never drop picks from pricing, but
-            # surface needs_review; prefer resolved records (they carry canonical fields).
-            items = rr["data"].get("resolved") or picks
-            needs_review = rr["data"].get("needs_review", [])
-    for p in items:
-        player, stat = p.get("player"), p.get("canonical_stat") or p.get("platform_stat") or p.get("stat")
-        m = _match_board(board_rows, player, stat)
-        if m and m.get("hit_prob") is not None:
-            priced.append({"player": player, "stat": m.get("stat"), "line": p.get("line"),
-                           "side": p.get("side", "more"), "prob": m["hit_prob"],
-                           "flavor": m.get("flavor", "standard"), "sport": m.get("sport")})
-            continue
-        # not on the loaded board — price independently via the API (project + price)
+        d = (client.resolve(picks).get("data") or {})
+        for r in (d.get("resolved", []) + d.get("needs_review", []) + d.get("unresolved", [])):
+            gate_by_key[(r.get("player"), r.get("stat"))] = r
+    for p in picks:
+        r = gate_by_key.get((p.get("player"), p.get("stat")))
+        action = ((r or {}).get("gate") or {}).get("action", "advisory")
+        stat = (r.get("canonical_stat") if r else None) or p.get("stat")
+        if action == "confirm":                         # covered MLB, medium -> hold
+            needs_review.append(r); continue
+        if action == "stop":                            # covered MLB, low/no -> do not price
+            notes.append(f"{p.get('player')} · {stat} — {r['gate']['reason']}"); continue
+        # proceed (covered high) OR advisory (uncovered): price via board, else project+price
+        leg = _price_from_board(p, stat, board_rows)
+        if leg:
+            priced.append(leg); continue
         if use_api and p.get("sport"):
-            pj = client.project([{"player": player, "stat": stat, "sport": p["sport"]}])
+            pj = client.project([{"player": p.get("player"), "stat": stat, "sport": p["sport"]}])
             mean = ((pj.get("data") or {}).get("means") or [{}])[0].get("mean")
-            pr = client.price([{"stat": stat, "line": p.get("line", 0), "side": p.get("side", "more"), "mean": mean}])
+            pr = client.price([{"stat": stat, "line": p.get("line", 0),
+                                "side": p.get("side", "more"), "mean": mean}])
             hp = ((pr.get("data") or {}).get("priced") or [{}])[0].get("hit_prob")
             if hp is not None:
-                priced.append({"player": player, "stat": stat, "line": p.get("line"),
+                priced.append({"player": p.get("player"), "stat": stat, "line": p.get("line"),
                                "side": p.get("side", "more"), "prob": hp, "sport": p.get("sport")})
                 continue
-        notes.append(f"{player} · {stat} — unpriced (no live line matched)")
+        notes.append(f"{p.get('player')} · {stat} — unpriced (no live line matched)")
     status = "partial" if (needs_review or notes) else "ok"
     return priced, needs_review, notes, _meta("api" if use_api else "local", status)
