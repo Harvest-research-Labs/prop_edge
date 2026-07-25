@@ -6,6 +6,7 @@ per instance (':memory:' for tests); the service uses a file-backed singleton.
 Schema self-migrates (idempotent ALTERs).
 """
 import os
+import json
 import sqlite3
 
 from .normalize import normalize_name, canonical_team
@@ -46,6 +47,11 @@ class EntityRegistry:
           event_id TEXT PRIMARY KEY, sport TEXT, league TEXT, season TEXT,
           event_start TEXT, event_status TEXT, home_team_id TEXT, away_team_id TEXT,
           venue TEXT, double_header TEXT, game_number INTEGER,
+          source TEXT, source_updated_at TEXT);
+        CREATE TABLE IF NOT EXISTS game_participation(
+          event_id TEXT PRIMARY KEY, game_status TEXT, abstract_state TEXT,
+          home_probable_id TEXT, away_probable_id TEXT,
+          home_lineup TEXT, away_lineup TEXT, lineup_posted INTEGER,
           source TEXT, source_updated_at TEXT);
         CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
         """)
@@ -147,6 +153,30 @@ class EntityRegistry:
             (event_id, "MLB", "MLB", season, start, status, home_team_id, away_team_id,
              venue, double_header, game_number, source, updated))
 
+    def upsert_game_participation(self, event_id, game_status, abstract_state, home_probable_id,
+                                  away_probable_id, home_lineup, away_lineup, lineup_posted,
+                                  updated, source="mlbstatsapi"):
+        """Snapshot a game's lineup / probable-pitcher state. Lineups stored as JSON
+        arrays of entity_ids so we can detect scratches and pitcher changes across refreshes."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO game_participation(event_id,game_status,abstract_state,"
+            "home_probable_id,away_probable_id,home_lineup,away_lineup,lineup_posted,"
+            "source,source_updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (event_id, game_status, abstract_state, home_probable_id, away_probable_id,
+             json.dumps(home_lineup or []), json.dumps(away_lineup or []),
+             1 if lineup_posted else 0, source, updated))
+
+    def get_game_participation(self, event_id):
+        r = self.conn.execute("SELECT * FROM game_participation WHERE event_id=?",
+                              (event_id,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["home_lineup"] = json.loads(d["home_lineup"] or "[]")
+        d["away_lineup"] = json.loads(d["away_lineup"] or "[]")
+        d["lineup_posted"] = bool(d["lineup_posted"])
+        return d
+
     def mark_ineligible_unseen(self, seen_ids, updated):
         """40-man players not seen this refresh -> ineligible + inactive (off the org)."""
         rows = self.conn.execute(
@@ -205,6 +235,10 @@ class EntityRegistry:
     def abbrev_by_mlb_id(self):
         return {r["mlb_id"]: r["abbrev"] for r in
                 self.conn.execute("SELECT mlb_id, abbrev FROM teams WHERE mlb_id IS NOT NULL")}
+
+    def mlb_id_for_team(self, team_id):
+        r = self.conn.execute("SELECT mlb_id FROM teams WHERE team_id=?", (team_id,)).fetchone()
+        return r["mlb_id"] if r else None
 
     def find_events(self, team_id, date_prefix=None):
         q = "SELECT * FROM events WHERE (home_team_id=? OR away_team_id=?)"

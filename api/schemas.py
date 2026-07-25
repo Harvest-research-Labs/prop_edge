@@ -42,6 +42,23 @@ class ResolveRequest(BaseModel):
     picks: list[RawPickIn]
 
 
+# ---- 2b. participation -----------------------------------------------------
+class ResolvedPickIn(BaseModel):
+    """A pick that has already been through /resolve (identity known)."""
+    entity_id: Optional[str] = None
+    player: Optional[str] = None
+    stat: Optional[str] = None
+    canonical_stat: Optional[str] = None
+    sport: Optional[str] = None
+    team_id: Optional[str] = None
+    event_id: Optional[str] = None
+    event_start: Optional[str] = None
+
+
+class ParticipationRequest(BaseModel):
+    picks: list[ResolvedPickIn]
+
+
 # ---- 3. project ------------------------------------------------------------
 class ProjectPickIn(BaseModel):
     player: str
@@ -49,6 +66,9 @@ class ProjectPickIn(BaseModel):
     sport: str
     team: Optional[str] = None
     opponent: Optional[str] = None
+    # participation context (passed IN, never fetched inside /project):
+    matchup_stale: bool = False               # opposing probable pitcher changed
+    probable_pitcher_id: Optional[str] = None
 
 
 class ProjectRequest(BaseModel):

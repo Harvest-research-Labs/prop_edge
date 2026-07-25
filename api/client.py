@@ -54,6 +54,10 @@ def resolve(picks):
     return _post("/resolve", {"picks": picks})
 
 
+def participation(picks):
+    return _post("/participation", {"picks": picks})
+
+
 def project(picks):
     return _post("/project", {"picks": picks})
 

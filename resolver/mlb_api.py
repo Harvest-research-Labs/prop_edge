@@ -105,6 +105,38 @@ def fetch_40man_roster(mlb_team_id):
     return [p for p in out if p["person_id"] and p["name"]]
 
 
+def fetch_game_participation(date):
+    """date 'YYYY-MM-DD' -> per-game lineup + probable-pitcher state (one hydrated call).
+
+    -> [{game_pk, game_date, status, abstract_state, home_mlb_id, away_mlb_id,
+         home_probable_id, away_probable_id, home_lineup:[person_id...] (batting order),
+         away_lineup:[...], lineup_posted}]. The `lineups` node is absent until a lineup
+    is posted (pending) and present once official; list order is the batting order.
+    """
+    data = _get(f"{BASE}/schedule", params={"sportId": SPORT_ID, "date": date,
+                                            "hydrate": "probablePitcher,lineups"})
+    out = []
+    for d in data.get("dates", []):
+        for g in d.get("games", []):
+            teams = g.get("teams", {})
+            home, away = teams.get("home", {}), teams.get("away", {})
+            lu = g.get("lineups") or {}
+            home_lu = [p.get("id") for p in (lu.get("homePlayers") or []) if p.get("id")]
+            away_lu = [p.get("id") for p in (lu.get("awayPlayers") or []) if p.get("id")]
+            out.append({
+                "game_pk": g.get("gamePk"), "game_date": g.get("gameDate"),
+                "status": (g.get("status", {}) or {}).get("detailedState"),
+                "abstract_state": (g.get("status", {}) or {}).get("abstractGameState"),
+                "home_mlb_id": home.get("team", {}).get("id"),
+                "away_mlb_id": away.get("team", {}).get("id"),
+                "home_probable_id": (home.get("probablePitcher") or {}).get("id"),
+                "away_probable_id": (away.get("probablePitcher") or {}).get("id"),
+                "home_lineup": home_lu, "away_lineup": away_lu,
+                "lineup_posted": bool(home_lu or away_lu),
+            })
+    return [e for e in out if e["game_pk"]]
+
+
 def fetch_schedule(date):
     """date 'YYYY-MM-DD' -> [{game_pk, game_date, status, home_mlb_id, away_mlb_id,
     venue, double_header, game_number, season}]."""

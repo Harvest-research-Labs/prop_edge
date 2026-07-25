@@ -18,8 +18,9 @@ from model import mlb_stats, matchup, brain, recommend, screenshot
 import storage
 from config import SUPPORTED_SPORTS
 from proedge_ui import (ranked_board, evaluate_slip, explain_board,
-                        extract_image, price_confirmed, api_available)
+                        extract_image, price_confirmed, api_available, participation_chip)
 from resolver.resolve import gate_mode
+from resolver.participation import participation_gate_mode
 
 st.set_page_config(page_title="ProEdge — Command Center", page_icon="🎯", layout="wide")
 
@@ -178,6 +179,9 @@ with st.sidebar:
     _gm = gate_mode()
     st.caption(f"MLB resolution gate: **{_gm}**"
                + ("" if _gm != "advisory" else " (warns, doesn't block)"))
+    _pm = participation_gate_mode()
+    st.caption(f"MLB participation gate: **{_pm}**"
+               + ("" if _pm != "advisory" else " (warns, doesn't block)"))
     st.divider()
     st.caption("Model · last 7d")
     m1, m2 = st.columns(2)
@@ -342,6 +346,25 @@ def run_screenshot(file):
         return picks
 
 
+_PART_EMOJI = {"confirmed_starting": "🟢", "confirmed_pitcher": "🟢", "expected_starting": "🟡",
+               "probable_pitcher": "🟡", "opener": "🟡", "bulk_relief": "🟡",
+               "bench": "🔴", "scratched": "🔴", "inactive": "🔴", "unknown": "⏳"}
+
+
+def render_participation_line(player, stat, chip):
+    """Compact lineup/participation status shown next to each confirmed pick."""
+    if not chip:
+        return
+    emoji = _PART_EMOJI.get(chip.get("status"), "•")
+    bits = [f"{emoji} **{chip.get('label')}**"]
+    if chip.get("batting_order"):
+        bits.append(f"batting {chip['batting_order']}")
+    ts = chip.get("source_updated_at")
+    if ts:
+        bits.append("as of " + (ts[11:16] + "Z" if len(ts) >= 16 else ts))
+    st.caption(f"↳ {player} · {stat} — " + " · ".join(bits))
+
+
 def render_confirm(picks):
     st.markdown("#### ✅ Confirm extracted picks")
     st.caption("Fix anything uncertain before pricing — OCR errors never flow into recommendations.")
@@ -352,16 +375,22 @@ def render_confirm(picks):
         picks_in = [{"player": r["Player"], "stat": r["Stat"], "line": r["Line"],
                      "side": r["Side"], "sport": None} for _, r in edited.iterrows()]
         priced, needs_review, notes, meta = price_confirmed(picks_in, rows, ss.use_api)
+        st.caption(f"Gates in effect — identity: **{meta.get('gate_mode', '?')}** · "
+                   f"participation: **{meta.get('participation_gate_mode', '?')}**")
         for leg in priced:
             add_leg({"player": leg["player"], "stat": leg["stat"], "line": leg.get("line"),
                      "side": leg.get("side", "more"), "model_prob": leg["prob"],
                      "flavor": leg.get("flavor", "standard"), "sport": leg.get("sport")})
+            render_participation_line(leg.get("player"), leg.get("stat"), leg.get("participation"))
         ss.extracted = None   # confirmation consumed; rail slip (rendered after) reflects the adds
         st.success(f"Priced and added {len(priced)} of {len(picks_in)} pick(s) to your slip.")
-        if needs_review:
-            st.warning(f"{len(needs_review)} pick(s) had low resolution confidence and were held for review.")
+        for r in needs_review:
+            chip = r.get("participation") if isinstance(r, dict) else None
+            reason = (r.get("gate") or {}).get("reason") if isinstance(r, dict) else ""
+            st.warning(f"Held — {r.get('player')} · {r.get('stat')}: {reason}")
+            render_participation_line(r.get("player"), r.get("stat"), chip)
         for n in notes:
-            st.info("Unpriced — " + n)
+            st.info("Held / unpriced — " + n)
         source_note(meta)
 
 

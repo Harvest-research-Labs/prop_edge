@@ -27,7 +27,7 @@ def test_health():
 
 def test_version():
     j = client.get("/version").json()
-    assert len(j["endpoints"]) == 7
+    assert len(j["endpoints"]) == 8 and "/participation" in j["endpoints"]
 
 
 def test_extract_no_key_is_not_fabricated():
@@ -52,6 +52,26 @@ def test_resolve_uses_registry():
     assert len(res) == 1 and res[0]["entity_id"] == "mlb-p-judge"
     assert res[0]["resolution_method"] == "exact_name" and res[0]["needs_review"] is False
     assert len(j["data"]["unresolved"]) == 1        # NBA unsupported + empty player
+    assert j["status"] == "partial"
+
+
+def test_participation_endpoint_envelope():
+    # non-MLB / unresolved picks are not evaluated and never hit the network
+    j = client.post("/participation", json={"picks": [
+        {"entity_id": None, "player": "Nobody", "stat": "Points", "sport": "NBA"}]}).json()
+    _assert_envelope(j)
+    out = j["data"]["participation"][0]
+    assert out["participation_confidence"] is None
+    assert out["gate"]["action"] == "advisory"
+    assert j["data"]["gate_mode"] in ("off", "advisory", "required")
+
+
+def test_project_stale_matchup_not_fabricated():
+    j = client.post("/project", json={"picks": [
+        {"player": "Someone", "stat": "Hits", "sport": "MLB", "matchup_stale": True}]}).json()
+    _assert_envelope(j)
+    m = j["data"]["means"][0]
+    assert m["mean"] is None and m["mean_source"] == "stale_matchup"
     assert j["status"] == "partial"
 
 

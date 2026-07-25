@@ -11,6 +11,8 @@ from sources.base import devig_two_way
 from model.projections import over_prob
 from model import brain, recommend, screenshot
 from resolver.resolve import resolve_pick
+from resolver import participation as part_svc
+from resolver.registry import get_registry
 from . import core
 
 
@@ -65,6 +67,30 @@ def svc_resolve(req):
                   warnings=warnings, confidence=conf)
 
 
+# ---- 2b. participation -----------------------------------------------------
+def svc_participation(req):
+    """Lineup + probable-pitcher validation for already-resolved picks. Authoritative
+    MLB Stats API; a rostered player is never assumed to participate. Fetch failure
+    preserves the last stored snapshot (picks fall to 'hold')."""
+    picks = [p.model_dump() for p in req.picks]
+    try:
+        outputs, meta = part_svc.evaluate(picks, get_registry())
+    except Exception as ex:  # noqa: BLE001
+        return _reply({"participation": []}, status="error",
+                      source="resolver.participation", errors=[str(ex)])
+    proceed = sum(1 for o in outputs if o.get("gate", {}).get("action") == "proceed")
+    status = "ok" if all(o.get("gate", {}).get("action") == "proceed" for o in outputs) else "partial"
+    warnings = ["Participation is validated against posted lineups / probable pitchers; "
+                "a rostered player is not treated as confirmed to participate.",
+                f"gate mode: {part_svc.participation_gate_mode()}"]
+    if meta["errors"]:
+        warnings.append("source refresh had failures — affected picks held on last valid state")
+    return _reply({"participation": outputs, "gate_mode": part_svc.participation_gate_mode(),
+                   "games_seen": meta["games"], "proceed": proceed},
+                  status=status, source=f"resolver.participation ({meta['source']})",
+                  warnings=warnings + meta["errors"])
+
+
 # ---- 3. project ------------------------------------------------------------
 def svc_project(req):
     sports = {p.sport for p in req.picks}
@@ -74,6 +100,14 @@ def svc_project(req):
     for p in req.picks:
         proj = projectors.get(p.sport)
         mean, src = (None, "none")
+        if getattr(p, "matchup_stale", False):
+            # opposing probable pitcher changed -> the matchup-dependent mean is invalid
+            missing = True
+            means.append({"player": p.player, "stat": p.stat, "sport": p.sport,
+                          "mean": None, "mean_source": "stale_matchup",
+                          "distribution": core.distribution_for(p.stat)})
+            warnings.append(f"{p.player}: projection stale — probable pitcher changed; reprice")
+            continue
         if proj:
             try:
                 m = proj(p.player, p.stat, p.team, p.opponent)

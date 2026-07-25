@@ -100,3 +100,73 @@ def test_gate_off_skips_resolve(monkeypatch):
     picks = [{"player": "Hurt Guy", "stat": "Hits", "line": 0.5, "side": "more", "sport": "MLB"}]
     priced, needs_review, notes, meta = proedge_ui.price_confirmed(picks, [BOARD_ROW], use_api=True)
     assert len(priced) == 1 and meta["gate_mode"] == "off" and notes == []
+
+
+# ---- participation gate in the pricing flow --------------------------------
+MLB_RESOLVED = {"player": "Star Hitter", "stat": "Hits", "canonical_stat": "hits",
+                "line": 1.5, "side": "more", "league": "MLB", "sport": "MLB",
+                "entity_id": "mlb-p-1", "team_id": "mlb-t-LAD",
+                "gate": {"action": "proceed", "reason": "high identity + active"}}
+MLB_BOARD = {"player": "Star Hitter", "stat": "Hits", "hit_prob": 0.58, "sport": "MLB",
+             "flavor": "standard"}
+
+
+def _resolve_ok(_picks):
+    return _env("ok", {"resolved": [MLB_RESOLVED], "needs_review": [], "unresolved": []})
+
+
+def _part(status, action):
+    return lambda rp: _env("partial", {"participation": [
+        {"player": "Star Hitter", "stat": "Hits", "participation_status": status,
+         "participation_confidence": 0.15, "batting_order": None, "source_updated_at": "t0",
+         "matchup_stale": False, "game_status": "Scheduled",
+         "gate": {"action": action, "reason": f"{status} — not participating"}}],
+        "gate_mode": "required"})
+
+
+def test_participation_required_blocks_bench(monkeypatch):
+    monkeypatch.setenv("PROEDGE_MLB_RESOLUTION_GATE", "advisory")     # identity passes
+    monkeypatch.setenv("PROEDGE_MLB_PARTICIPATION_GATE", "required")
+    monkeypatch.setattr(proedge_ui.client, "resolve", _resolve_ok)
+    monkeypatch.setattr(proedge_ui.client, "participation", _part("bench", "stop"))
+    picks = [{"player": "Star Hitter", "stat": "Hits", "line": 1.5, "side": "more", "sport": "MLB"}]
+    priced, needs_review, notes, meta = proedge_ui.price_confirmed(picks, [MLB_BOARD], use_api=True)
+    assert priced == [] and meta["participation_gate_mode"] == "required"
+    assert any("participation:" in n for n in notes)
+
+
+def test_participation_required_holds_pending(monkeypatch):
+    monkeypatch.setenv("PROEDGE_MLB_RESOLUTION_GATE", "advisory")
+    monkeypatch.setenv("PROEDGE_MLB_PARTICIPATION_GATE", "required")
+    monkeypatch.setattr(proedge_ui.client, "resolve", _resolve_ok)
+    monkeypatch.setattr(proedge_ui.client, "participation", _part("unknown", "confirm"))
+    picks = [{"player": "Star Hitter", "stat": "Hits", "line": 1.5, "side": "more", "sport": "MLB"}]
+    priced, needs_review, notes, meta = proedge_ui.price_confirmed(picks, [MLB_BOARD], use_api=True)
+    assert priced == [] and len(needs_review) == 1                    # held for confirmation
+
+
+def test_participation_advisory_prices_with_chip(monkeypatch):
+    monkeypatch.setenv("PROEDGE_MLB_RESOLUTION_GATE", "advisory")
+    monkeypatch.setenv("PROEDGE_MLB_PARTICIPATION_GATE", "advisory")
+    monkeypatch.setattr(proedge_ui.client, "resolve", _resolve_ok)
+    monkeypatch.setattr(proedge_ui.client, "participation", _part("bench", "stop"))
+    picks = [{"player": "Star Hitter", "stat": "Hits", "line": 1.5, "side": "more", "sport": "MLB"}]
+    priced, needs_review, notes, meta = proedge_ui.price_confirmed(picks, [MLB_BOARD], use_api=True)
+    assert len(priced) == 1 and priced[0]["participation"]["label"] == "Bench"   # priced + chip
+    assert any(n.startswith("advisory") and "participation" in n for n in notes)
+
+
+def test_participation_skipped_when_identity_off(monkeypatch):
+    monkeypatch.setenv("PROEDGE_MLB_RESOLUTION_GATE", "off")
+    monkeypatch.setenv("PROEDGE_MLB_PARTICIPATION_GATE", "required")
+
+    def fail_r(_p):
+        raise AssertionError("resolve must not run when identity gate is off")
+
+    def fail_p(_p):
+        raise AssertionError("participation must not run when identity gate is off")
+    monkeypatch.setattr(proedge_ui.client, "resolve", fail_r)
+    monkeypatch.setattr(proedge_ui.client, "participation", fail_p)
+    picks = [{"player": "Star Hitter", "stat": "Hits", "line": 1.5, "side": "more", "sport": "MLB"}]
+    priced, needs_review, notes, meta = proedge_ui.price_confirmed(picks, [MLB_BOARD], use_api=True)
+    assert len(priced) == 1                                          # priced, no gating calls

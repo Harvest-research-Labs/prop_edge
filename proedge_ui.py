@@ -13,6 +13,7 @@ from config import canonical_stat
 from model import brain, recommend, screenshot
 from api import client
 from resolver.resolve import gate_mode
+from resolver.participation import participation_gate_mode
 
 
 def key():
@@ -139,49 +140,103 @@ def _price_from_board(p, stat, board_rows):
     return None
 
 
+_PART_LABELS = {"confirmed_starting": "Confirmed", "confirmed_pitcher": "Confirmed (P)",
+                "expected_starting": "Expected", "probable_pitcher": "Probable (P)",
+                "opener": "Opener", "bulk_relief": "Bulk relief", "bench": "Bench",
+                "scratched": "Scratched", "inactive": "Out", "unknown": "Lineup pending"}
+
+
+def participation_chip(part):
+    """Compact UI status from a /participation output (or None)."""
+    if not part:
+        return None
+    label = _PART_LABELS.get(part.get("participation_status"), part.get("participation_status"))
+    if part.get("game_status") in ("Delayed", "Delayed Start"):
+        label = "Game delayed"
+    elif part.get("matchup_stale"):
+        label = f"{label} · Pitcher changed"
+    return {"label": label, "status": part.get("participation_status"),
+            "batting_order": part.get("batting_order"),
+            "confidence": part.get("participation_confidence"),
+            "source_updated_at": part.get("source_updated_at"),
+            "gate": (part.get("gate") or {}).get("action"),
+            "warnings": part.get("warnings", [])}
+
+
 def price_confirmed(picks, board_rows, use_api):
     """picks: [{player,stat,line,side,sport?}] -> (priced_legs, needs_review, notes, meta).
 
-    /resolve is a MANDATORY gate for covered MLB entities: proceed -> price,
-    confirm -> held for review, stop -> not priced. Uncovered sports keep the
-    advisory board-match behavior.
+    Two MANDATORY gates for covered MLB, each with its own mode:
+      /resolve  (identity)      -> PROEDGE_MLB_RESOLUTION_GATE
+      /participation (lineup)   -> PROEDGE_MLB_PARTICIPATION_GATE
+    proceed -> price, confirm -> held for review, stop -> not priced. Participation
+    is evaluated only for identity-resolved picks (it needs the entity + event), so
+    turning the identity gate off disables both. Uncovered sports stay advisory.
     """
-    mode = gate_mode()                                  # off | advisory | required
+    mode = gate_mode()
+    pmode = participation_gate_mode()
     priced, needs_review, notes = [], [], []
-    gate_by_key = {}
+    resolved_map, part_map = {}, {}
     if use_api and mode != "off":
         d = (client.resolve(picks).get("data") or {})
         for r in (d.get("resolved", []) + d.get("needs_review", []) + d.get("unresolved", [])):
-            gate_by_key[(r.get("player"), r.get("stat"))] = r
+            resolved_map[(r.get("player"), r.get("stat"))] = r
+        if pmode != "off":
+            rp = [r for r in resolved_map.values() if r.get("entity_id")]
+            if rp:
+                pdata = (client.participation(rp).get("data") or {})
+                for o in pdata.get("participation", []):
+                    part_map[(o.get("player"), o.get("stat"))] = o
+
     for p in picks:
-        r = gate_by_key.get((p.get("player"), p.get("stat")))
+        key = (p.get("player"), p.get("stat"))
+        r = resolved_map.get(key)
         g = (r or {}).get("gate") or {}
         action = g.get("action", "advisory")
-        covered = bool(r and r.get("league"))           # gate only bites covered MLB
+        covered = bool(r and r.get("league"))
         stat = (r.get("canonical_stat") if r else None) or p.get("stat")
+        part = part_map.get(key)
+        chip = participation_chip(part)
+        pgate = (part or {}).get("gate", {}).get("action")
+        preason = ((part or {}).get("gate") or {}).get("reason")
+
+        # 1. identity gate
         if mode == "required" and covered:
             if action == "confirm":
-                needs_review.append(r); continue
+                needs_review.append({**r, "participation": chip}); continue
             if action == "stop":
                 notes.append(f"{p.get('player')} · {stat} — {g.get('reason')}"); continue
         elif mode == "advisory" and covered and action in ("confirm", "stop"):
-            notes.append(f"advisory · {p.get('player')} · {stat} — {g.get('reason')}")  # warn, still price
-        # price via board, else project+price
+            notes.append(f"advisory · {p.get('player')} · {stat} — {g.get('reason')}")
+        # 2. participation gate
+        if covered and part is not None:
+            if pmode == "required":
+                if pgate == "confirm":
+                    needs_review.append({**r, "participation": chip}); continue
+                if pgate == "stop":
+                    notes.append(f"{p.get('player')} · {stat} — participation: {preason}"); continue
+            elif pmode == "advisory" and pgate in ("confirm", "stop"):
+                notes.append(f"advisory · {p.get('player')} · {stat} — participation: {preason}")
+
+        # 3. price via board, else project+price
         leg = _price_from_board(p, stat, board_rows)
-        if leg:
-            priced.append(leg); continue
-        if use_api and p.get("sport"):
+        if leg is None and use_api and p.get("sport"):
             pj = client.project([{"player": p.get("player"), "stat": stat, "sport": p["sport"]}])
             mean = ((pj.get("data") or {}).get("means") or [{}])[0].get("mean")
             pr = client.price([{"stat": stat, "line": p.get("line", 0),
                                 "side": p.get("side", "more"), "mean": mean}])
             hp = ((pr.get("data") or {}).get("priced") or [{}])[0].get("hit_prob")
             if hp is not None:
-                priced.append({"player": p.get("player"), "stat": stat, "line": p.get("line"),
-                               "side": p.get("side", "more"), "prob": hp, "sport": p.get("sport")})
-                continue
+                leg = {"player": p.get("player"), "stat": stat, "line": p.get("line"),
+                       "side": p.get("side", "more"), "prob": hp, "sport": p.get("sport")}
+        if leg is not None:
+            if chip:
+                leg["participation"] = chip
+            priced.append(leg); continue
         notes.append(f"{p.get('player')} · {stat} — unpriced (no live line matched)")
+
     status = "partial" if (needs_review or notes) else "ok"
     meta = _meta("api" if use_api else "local", status)
     meta["gate_mode"] = mode
+    meta["participation_gate_mode"] = pmode
     return priced, needs_review, notes, meta

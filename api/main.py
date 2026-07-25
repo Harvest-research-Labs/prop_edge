@@ -9,8 +9,8 @@ Docs: http://localhost:8000/docs
 from fastapi import FastAPI
 
 from . import core, services
-from .schemas import (ApiResponse, ExtractRequest, ResolveRequest, ProjectRequest,
-                      PriceRequest, RankRequest, SlipRequest, ExplainRequest)
+from .schemas import (ApiResponse, ExtractRequest, ResolveRequest, ParticipationRequest,
+                      ProjectRequest, PriceRequest, RankRequest, SlipRequest, ExplainRequest)
 
 app = FastAPI(title="ProEdge API", version=core.SERVICE_VERSION,
               description="Stable service contracts around the existing PropEdge models.")
@@ -33,8 +33,8 @@ def health():
 @app.get("/version")
 def version():
     return {"service_version": core.SERVICE_VERSION, "model_version": core.MODEL_VERSION,
-            "endpoints": ["/extract", "/resolve", "/project", "/price", "/rank",
-                          "/slip/eval", "/explain"]}
+            "endpoints": ["/extract", "/resolve", "/participation", "/project", "/price",
+                          "/rank", "/slip/eval", "/explain"]}
 
 
 @app.post("/extract", response_model=ApiResponse)
@@ -45,6 +45,11 @@ def extract(req: ExtractRequest):
 @app.post("/resolve", response_model=ApiResponse)
 def resolve(req: ResolveRequest):
     return _wrap(services.svc_resolve(req))
+
+
+@app.post("/participation", response_model=ApiResponse)
+def participation(req: ParticipationRequest):
+    return _wrap(services.svc_participation(req))
 
 
 @app.post("/project", response_model=ApiResponse)
