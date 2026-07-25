@@ -14,7 +14,7 @@ import streamlit as st
 
 from sources import prizepicks, underdog
 from model.projections import annotate
-from model import mlb_stats, matchup, brain, recommend, screenshot
+from model import mlb_stats, matchup, brain, recommend, screenshot, lottery
 import storage
 from config import SUPPORTED_SPORTS
 from proedge_ui import (ranked_board, evaluate_slip, explain_board,
@@ -218,16 +218,17 @@ css()
 with st.sidebar:
     st.markdown('<div class="ce-brand"><span class="mk">PRO</span>EDGE</div>', unsafe_allow_html=True)
     st.caption("Command Center · customer view")
-    ss.section = st.radio("Navigate", ["Home", "Analyze", "Find Picks", "My Slip", "Results"],
-                          index=["Home", "Analyze", "Find Picks", "My Slip", "Results"].index(ss.section),
+    _NAV = ["Home", "Analyze", "Find Picks", "My Slip", "Lottery", "Results"]
+    ss.section = st.radio("Navigate", _NAV,
+                          index=_NAV.index(ss.section) if ss.section in _NAV else 0,
                           label_visibility="collapsed")
     st.divider()
     sports = st.multiselect("Sports", SUPPORTED_SPORTS, default=["MLB", "NBA"])
     if st.button("↻ Refresh lines", use_container_width=True):
         load_board.clear(); st.rerun()
     with st.expander("🧰 Tools"):
-        st.caption("Lottery Picker and batch tools live in the research app (`app.py`) — "
-                   "kept separate from the sports workflow.")
+        st.caption("🎰 **Lottery** (Powerball / Mega Millions) is now in the nav. Batch tools and "
+                   "the research dashboard live in `app.py`.")
     ss.use_api = st.toggle("Route through API gateway", value=ss.use_api,
                            help="Off = direct local model (fallback). On = FastAPI gateway (PROEDGE_API_URL).")
     if ss.use_api:
@@ -453,6 +454,92 @@ def render_confirm(picks):
         source_note(meta)
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def _load_lottery(game_key, limit):
+    return lottery.fetch_draws(game_key, limit)
+
+
+def _ball_html(white, special, special_color):
+    chips = "".join(
+        f'<span style="display:inline-flex;align-items:center;justify-content:center;width:38px;'
+        f'height:38px;border-radius:50%;background:#EEF1F8;color:#0A0F1E;font-weight:800;'
+        f'font-family:var(--mono);margin:3px;border:2px solid #C9D2E6;">{n}</span>' for n in white)
+    sp = (f'<span style="display:inline-flex;align-items:center;justify-content:center;width:38px;'
+          f'height:38px;border-radius:50%;background:{special_color};color:#fff;font-weight:800;'
+          f'font-family:var(--mono);margin:3px;">{special}</span>')
+    return f'<div style="margin:6px 0;">{chips}<span style="margin:0 6px;color:#8A93AD;">+</span>{sp}</div>'
+
+
+def render_lottery():
+    st.markdown("### 🎰 Lottery — Powerball & Mega Millions")
+    st.caption("Number generators backed by real draw history. **Reality check:** every draw is "
+               "independent and uniform — no method changes your odds. The only real edge is "
+               "*combinatorial*: uncommon numbers (above 31, no patterns) don't help you win, but "
+               "they lower the chance you'd **split** a jackpot with the birthday-playing crowd.")
+    c1, c2 = st.columns(2)
+    game = c1.radio("Game", list(lottery.GAMES.keys()), horizontal=True, key="lotto_game")
+    window = c2.selectbox("History window", ["Last 100", "Last 250", "Last 500", "Max (1000)"],
+                          index=2, key="lotto_window")
+    limit = {"Last 100": 100, "Last 250": 250, "Last 500": 500, "Max (1000)": 1000}[window]
+    g = lottery.GAMES[game]
+    try:
+        draws = _load_lottery(game, limit)
+    except Exception as e:  # noqa: BLE001
+        draws = []
+        st.error(f"Couldn't load draw history: {e}")
+    if not draws:
+        st.info("No draw history available right now.")
+        return
+    st.caption(f"Loaded **{len(draws)}** draws · {draws[-1]['date']} → {draws[0]['date']} · "
+               f"{g['white_count']} white (1–{g['white_max']}) + {g['special_name']} "
+               f"(1–{g['special_max']}).")
+
+    st.markdown("#### 🎟️ Generate a line")
+    gc1, gc2 = st.columns([2, 1])
+    strat = gc1.radio("Strategy", list(lottery.PICKERS.keys()), key="lotto_strat")
+    n_lines = gc2.slider("How many lines", 1, 10, 1, key="lotto_lines")
+    if st.button("🎰 Generate numbers", type="primary", key="lotto_gen"):
+        ss["lotto_picks"] = lottery.generate(game, lottery.PICKERS[strat], draws, n_lines)
+    picks = ss.get("lotto_picks", [])
+    if picks:
+        st.markdown("".join(_ball_html(w, s, g["special_color"]) for w, s in picks),
+                    unsafe_allow_html=True)
+        st.code("\n".join(f"{' '.join(f'{n:02d}' for n in w)}  |  {g['special_name']}: {s:02d}"
+                          for w, s in picks), language=None)
+
+    st.divider()
+    st.markdown("#### 🎫 Check my ticket")
+    st.caption("See how an exact line would have done against every draw in the window.")
+    in_cols = st.columns(g["white_count"] + 1)
+    my_white = []
+    for i in range(g["white_count"]):
+        v = in_cols[i].number_input(f"#{i+1}", min_value=1, max_value=g["white_max"],
+                                    value=None, step=1, key=f"tk_w{i}_{game}")
+        if v:
+            my_white.append(int(v))
+    my_sp = in_cols[-1].number_input(g["special_name"], min_value=1, max_value=g["special_max"],
+                                     value=None, step=1, key=f"tk_s_{game}")
+    if st.button("🎫 Check it", key="lotto_check"):
+        ss["lotto_ticket"] = lottery.check_ticket(game, my_white, int(my_sp) if my_sp else None, draws)
+    res = ss.get("lotto_ticket")
+    if res and not res["valid"]:
+        st.warning(res["error"])
+    elif res:
+        st.markdown(_ball_html(sorted(my_white), int(my_sp), g["special_color"]), unsafe_allow_html=True)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Draws checked", res["draws_checked"])
+        m2.metric("Winning draws", len(res["wins"]))
+        m3.metric("Hypothetical winnings", f"${res['total_amount']:,.0f}"
+                  + (f" + {res['jackpots']}× JP" if res["jackpots"] else ""))
+        if res["tier_counts"]:
+            st.dataframe(pd.DataFrame([{"Prize tier": k, "Times won": v} for k, v in
+                                      sorted(res["tier_counts"].items(), key=lambda kv: -kv[1])]),
+                         hide_index=True, use_container_width=True)
+        else:
+            st.info("This line wouldn't have hit any prize tier in the window — the norm; odds are astronomical.")
+        st.caption("Purely hypothetical back-look — past draws don't predict future ones.")
+
+
 # ---------------------------------------------------------------- sections
 sec = ss.section
 main, rail = st.columns([2.4, 1], gap="large")
@@ -496,6 +583,9 @@ with main:
     elif sec == "My Slip":
         st.markdown("### 🎟️ My Slip")
         render_slip()
+
+    elif sec == "Lottery":
+        render_lottery()
 
     elif sec == "Results":
         st.markdown("### 📊 Results")
