@@ -5,3 +5,7 @@ data/*.db
 .streamlit/secrets.toml
 .venv/
 .claude/
+
+# resolver registry (built/seeded on demand)
+resolver/entities.db
+*.db
