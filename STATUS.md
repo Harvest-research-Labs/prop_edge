@@ -1,15 +1,20 @@
 # STATUS — PropEdge (Smarter Betting)
 
-**Updated:** 2026-07-06 · **Repo:** Harvest-research-Labs/prop_edge
+**Updated:** 2026-09-18 · **Repo:** Harvest-research-Labs/prop_edge
 
 ## Ground truth
+- **Command Center merged to main (2026-09-18):** FastAPI gateway over 7 service
+  boundaries, real MLB entity resolution with a mandatory participation gate, and
+  the Command Center UI. This was stranded on `feat/command-center`; verified at
+  84/84 tests before merge.
 - Working Streamlit app on **port 8502** (`.streamlit/config.toml`). 11 tabs led by
   **🧠 Smart Board** (the AI brain), plus Best Plays, +EV/Kelly, Slate, Goblins &
   Demons, All Props, Cross-Book Edges, Pick Evaluator, Post-Mortem, Backtest, Lottery.
 - Pulls live prop lines from PrizePicks & Underdog; a quant model prices a hit
   probability for every line (Poisson/Normal by stat), with an own-MLB model +
   matchup/park adjustment.
-- **No automated test suite yet (0 test files)** — verification is manual/live.
+- **Automated test suite: 84 tests, all passing** (`python3 -m pytest tests -q`) covering the API
+  gateway, MLB entity resolver, backfill, participation gating and integration paths.
 
 ## Working / verified
 - Board loads live (~7k lines / ~240 players on a live MLB slate).
@@ -20,8 +25,8 @@
 - Real-market-only edge gating, side-relative edge, anchor-zone ranking.
 
 ## Not done / next
-- Add an automated test suite (brain verdicts, candidate ranking, edge gating are
-  pure functions — easy first targets).
+- Extend coverage to the brain itself (verdicts, candidate ranking, edge gating are
+  pure functions and still untested).
 - **Runs local-only.** PrizePicks blocks datacenter IPs → won't work on Streamlit
   Cloud without a residential proxy. Data sources are undocumented, gray-area ToS.
 - Roadmap: NBA own-model, paid odds API, matchup-adjusted pitcher props.
