@@ -31,6 +31,12 @@ UNDERDOG_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     ),
     "Accept": "application/json",
+    # Underdog's web client identity. Requests without these may be refused
+    # with 426 (client too old); bump client-version if that happens.
+    "client-type": "web",
+    "client-version": os.environ.get("UNDERDOG_CLIENT_VERSION", "20260925221104"),
+    "Origin": "https://app.underdogsports.com",
+    "Referer": "https://app.underdogsports.com/",
 }
 
 PRIZEPICKS_PROJECTIONS_URL = "https://api.prizepicks.com/projections"
@@ -40,6 +46,7 @@ PRIZEPICKS_LEAGUES_URL = "https://api.prizepicks.com/leagues"
 UNDERDOG_LINES_URLS = [
     u for u in [os.environ.get("UNDERDOG_LINES_URL")] if u
 ] + [
+    "https://api.underdogfantasy.com/v1/over_under_lines",
     "https://api.underdogfantasy.com/beta/v6/over_under_lines",
     "https://api.underdogfantasy.com/beta/v5/over_under_lines",
 ]
