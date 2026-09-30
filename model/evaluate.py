@@ -37,6 +37,19 @@ def parse_side(label):
     return "more" if any(w in s for w in ("more", "over", "higher", "more/over")) else "less"
 
 
+def grade_leg(line, side, actual):
+    """'hit' | 'miss' | 'push' from the line, pick direction and final stat,
+    or 'unknown' if the line or actual is missing/non-numeric."""
+    try:
+        line, actual = float(line), float(actual)
+    except (TypeError, ValueError):
+        return "unknown"
+    if actual == line:
+        return "push"
+    went_over = actual > line
+    return "hit" if went_over == (_nm(side) in MORE) else "miss"
+
+
 def build_mean_lookup(rows):
     """{(player, canonical_stat): (mean, stat_label)} from annotated rows."""
     lut = {}
