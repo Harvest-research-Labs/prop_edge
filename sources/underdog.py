@@ -9,7 +9,7 @@ Each line's two options carry American odds, which become over/under odds.
 
 import requests
 
-from config import UNDERDOG_LINES_URL, UNDERDOG_HEADERS
+from config import UNDERDOG_LINES_URLS, UNDERDOG_HEADERS
 from sources.base import Prop
 
 # Underdog sport_id -> our canonical label.
@@ -37,17 +37,41 @@ def _split_title(title):
     return title.strip(), None
 
 
+def _get_payload(session, timeout, log):
+    """GET the lines payload, walking UNDERDOG_LINES_URLS newest-first.
+    Underdog answers a retired API version with 426 Upgrade Required, so on a
+    426/404/410 we try the next version. Returns (payload, error)."""
+    err = None
+    for url in UNDERDOG_LINES_URLS:
+        try:
+            resp = session.get(url, headers=UNDERDOG_HEADERS, timeout=timeout)
+        except Exception as e:  # noqa: BLE001
+            return None, str(e)
+        if resp.status_code == 200:
+            try:
+                d = resp.json()
+            except ValueError as e:
+                return None, f"bad JSON: {e}"
+            # Solo-sport events (PGA, tennis, MMA) live under solo_games.
+            d.setdefault("games", [])
+            d["games"] = list(d["games"]) + list(d.get("solo_games") or [])
+            return d, None
+        err = f"HTTP {resp.status_code}"
+        if resp.status_code == 426:
+            err += " (API version retired; set UNDERDOG_LINES_URL to the current endpoint)"
+        if resp.status_code not in (404, 410, 426):
+            return None, err
+        log(f"Underdog: {url} -> {resp.status_code}, trying next version")
+    return None, err
+
+
 def fetch(sports, session=None, timeout=30, log=lambda m: None):
     """Fetch Underdog and return (props, errors) filtered to `sports`."""
     session = session or requests.Session()
     wanted = set(sports)
-    try:
-        resp = session.get(UNDERDOG_LINES_URL, headers=UNDERDOG_HEADERS, timeout=timeout)
-        if resp.status_code != 200:
-            return [], {"Underdog": f"HTTP {resp.status_code}"}
-        d = resp.json()
-    except Exception as e:  # noqa: BLE001
-        return [], {"Underdog": str(e)}
+    d, err = _get_payload(session, timeout, log)
+    if err:
+        return [], {"Underdog": err}
 
     players = {p["id"]: p for p in d.get("players", [])}
     appearances = {a["id"]: a for a in d.get("appearances", [])}
@@ -118,13 +142,9 @@ def fetch_games(sports, session=None, timeout=30, log=lambda m: None):
     from collections import Counter
     session = session or requests.Session()
     wanted = set(sports)
-    try:
-        resp = session.get(UNDERDOG_LINES_URL, headers=UNDERDOG_HEADERS, timeout=timeout)
-        if resp.status_code != 200:
-            return [], {"Underdog": f"HTTP {resp.status_code}"}
-        d = resp.json()
-    except Exception as e:  # noqa: BLE001
-        return [], {"Underdog": str(e)}
+    d, err = _get_payload(session, timeout, log)
+    if err:
+        return [], {"Underdog": err}
 
     appr = {a["id"]: a for a in d.get("appearances", [])}
     counts = Counter()

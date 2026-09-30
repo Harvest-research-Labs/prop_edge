@@ -5,6 +5,8 @@ Everything that is likely to drift (PrizePicks league ids, stat shapes) lives
 here so the source/model code stays stable.
 """
 
+import os
+
 # --- HTTP ---------------------------------------------------------------
 
 # These headers are what get PrizePicks' /projections endpoint past its
@@ -33,7 +35,15 @@ UNDERDOG_HEADERS = {
 
 PRIZEPICKS_PROJECTIONS_URL = "https://api.prizepicks.com/projections"
 PRIZEPICKS_LEAGUES_URL = "https://api.prizepicks.com/leagues"
-UNDERDOG_LINES_URL = "https://api.underdogfantasy.com/beta/v5/over_under_lines"
+# Underdog retires old API versions with HTTP 426 (Upgrade Required). We try
+# the newest first and fall back; override with UNDERDOG_LINES_URL env var.
+UNDERDOG_LINES_URLS = [
+    u for u in [os.environ.get("UNDERDOG_LINES_URL")] if u
+] + [
+    "https://api.underdogfantasy.com/beta/v6/over_under_lines",
+    "https://api.underdogfantasy.com/beta/v5/over_under_lines",
+]
+UNDERDOG_LINES_URL = UNDERDOG_LINES_URLS[0]
 
 # Seconds to wait between PrizePicks league fetches. The endpoint 429s if you
 # hammer it; ~2s between calls is comfortable.
