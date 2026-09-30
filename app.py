@@ -549,8 +549,33 @@ with tab_ev:
             "−EV on average; size small and use fractional Kelly."
         )
 
+def _game_key(g):
+    return f"{g.get('sport')}|{g.get('away')}|{g.get('home')}|{g.get('start_time')}"
+
+
+def _game_props(df, g):
+    """Board rows for one slate game: same sport, a team on either side, and
+    (when both have times) a start within 6h so a series' next game is excluded."""
+    teams = {(g.get("away") or "").upper(), (g.get("home") or "").upper()} - {""}
+    if not teams:
+        return df.iloc[0:0]
+    m = (df["sport"] == g.get("sport")) & (
+        df["team"].fillna("").str.upper().isin(teams)
+        | df["opponent"].fillna("").str.upper().isin(teams))
+    rows = df[m]
+    gt = pd.to_datetime(g.get("start_time"), utc=True, errors="coerce")
+    if "start_time" in rows and not pd.isna(gt):
+        st_ = pd.to_datetime(rows["start_time"], utc=True, errors="coerce", format="mixed")
+        rows = rows[st_.isna() | ((st_ - gt).abs() <= pd.Timedelta(hours=6))]
+    return rows
+
+
+def _select_game(key):
+    st.session_state["slate_game"] = key
+
+
 @st.fragment(run_every=30)
-def _slate_fragment():
+def _slate_fragment(df):
     games, gerr = load_games(tuple(st.session_state.get("slate_sports", ("MLB",))))
     if gerr:
         st.warning(f"Couldn't load the slate: {gerr}")
@@ -558,7 +583,8 @@ def _slate_fragment():
         st.info("No games found for the selected sports.")
         return
     live = [g for g in games if (g.get("status") or "scheduled") != "scheduled"]
-    st.caption(f"{len(games)} game(s) · {len(live)} live or final")
+    st.caption(f"{len(games)} game(s) · {len(live)} live or final · tap a game to see its props")
+    selected = st.session_state.get("slate_game")
     per_row = 3
     for i in range(0, len(games), per_row):
         for col, g in zip(st.columns(per_row), games[i:i + per_row]):
@@ -576,22 +602,60 @@ def _slate_fragment():
                          f"<span style='color:#B9B2D6'> · {prog}</span>")
             pl = g.get("props")
             props_txt = f" · {pl} props" if pl is not None else ""
+            key = _game_key(g)
+            is_sel = key == selected
+            border = VIOLET if is_sel else "rgba(139,92,246,.25)"
             col.markdown(
                 f"""
-                <div style="background:#17122A;border:1px solid rgba(139,92,246,.25);
-                            border-radius:14px;padding:12px 14px;margin-bottom:10px">
+                <div style="background:#17122A;border:{'2px' if is_sel else '1px'} solid {border};
+                            border-radius:14px;padding:12px 14px;margin-bottom:6px">
                   <div style="font-weight:700;font-size:1.02rem">{away} @ {home}</div>
                   <div style="font-size:.85rem;margin-top:5px">{badge}</div>
                   <div style="color:{VIOLET};font-size:.76rem;margin-top:7px">
                     {g.get('sport')}{props_txt}</div>
                 </div>
                 """, unsafe_allow_html=True)
+            col.button("✓ Selected" if is_sel else "View props", key=f"slate_{key}",
+                       type="primary" if is_sel else "secondary", use_container_width=True,
+                       on_click=_select_game, args=(None if is_sel else key,))
+
+    g = next((g for g in games if _game_key(g) == selected), None)
+    if not g:
+        return
+    st.divider()
+    head, clear = st.columns([4, 1])
+    head.markdown(f"#### {g.get('away')} @ {g.get('home')} · {g.get('sport')} props")
+    clear.button("✕ Clear", key="slate_clear", use_container_width=True,
+                 on_click=_select_game, args=(None,))
+    gp = _game_props(df, g)
+    if gp.empty:
+        st.info("No props on the loaded board for this game. If a book was blocked "
+                "(see the sidebar), try 🔄 Refresh lines later.")
+        return
+    gstat = st.multiselect("Prop / stat type", _stat_options(gp), placeholder="All stats",
+                           key="slate_stat_filter")
+    gp = _filter_stats(gp, gstat).copy()
+    gp["Flavor"] = gp["flavor"].map(FLAVOR_LABEL).fillna(gp["flavor"])
+    gp["Hit %"] = pct(gp["hit_prob"])
+    gp["Edge"] = pct(gp["edge"])
+    view = gp[["book", "player", "team", "stat", "line", "Flavor", "mean", "Hit %", "Edge"]].rename(
+        columns={"book": "Book", "player": "Player", "team": "Team", "stat": "Stat",
+                 "line": "Line", "mean": "Proj"}
+    ).sort_values("Hit %", ascending=False)
+    st.caption(f"{len(view)} line(s)")
+    st.dataframe(
+        view, use_container_width=True, hide_index=True, height=480,
+        column_config={
+            "Hit %": st.column_config.ProgressColumn("Hit %", min_value=0, max_value=100, format="%.1f%%"),
+            "Edge": st.column_config.NumberColumn("Edge", format="%.1f"),
+        },
+    )
 
 
 with tab_slate:
     st.subheader("Today's slate")
     st.caption("Live scores refresh automatically (~30s) — or hit 🔄 Refresh lines anytime.")
-    _slate_fragment()
+    _slate_fragment(df)
 
 with tab_gd:
     st.subheader("PrizePicks Goblin & Demon hit likelihood")
