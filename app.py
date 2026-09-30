@@ -811,27 +811,66 @@ with tab_eval:
 with tab_pm:
     st.subheader("Why didn't it hit?")
     st.caption(
-        "Upload a screenshot of a settled slip that lost. We read each leg's "
-        "result, then compare it against our model to tell you whether it was a "
+        "Upload a screenshot of a settled slip that lost, or type the legs in. We "
+        "compare each leg's result against our model to tell you whether it was a "
         "bad pick or just bad luck."
     )
-    up_pm = st.file_uploader(
-        "Upload a screenshot of the settled (graded) slip", type=["png", "jpg", "jpeg"],
-        key="pm_upload")
-    if up_pm is not None:
-        st.image(up_pm, width=320)
-        if st.button("🔎 Analyze why it didn't hit", type="primary"):
-            key = _anthropic_key()
-            if not key:
-                st.warning("Screenshot reading needs an Anthropic API key. Add `ANTHROPIC_API_KEY` to "
-                           "`.streamlit/secrets.toml` or your environment, then try again.")
+    pm_mode = st.radio("How do you want to enter the slip?",
+                       ["Enter manually", "Upload screenshot"],
+                       horizontal=True, key="pm_mode",
+                       help="Manual entry needs no Anthropic API key.")
+
+    if pm_mode == "Enter manually":
+        st.caption("One row per leg. Leave **Actual** blank if you don't know it. "
+                   "Results are graded from the line, pick and actual.")
+        blank = pd.DataFrame([{"Player": "", "Stat": "", "Line": None,
+                               "Pick": "More / Over", "Actual": None}] * 6)
+        pm_ed = st.data_editor(
+            blank, hide_index=True, use_container_width=True, num_rows="dynamic",
+            key="pm_manual",
+            column_config={
+                "Player": st.column_config.TextColumn("Player", help="e.g. Matthew Boyd"),
+                "Stat": st.column_config.TextColumn("Stat", help="e.g. Strikeouts, Total Bases"),
+                "Line": st.column_config.NumberColumn("Line", step=0.5, format="%.1f"),
+                "Pick": st.column_config.SelectboxColumn(
+                    "Pick", options=["More / Over", "Less / Under"]),
+                "Actual": st.column_config.NumberColumn("Actual", step=1.0,
+                                                        help="What the player finished with"),
+            },
+        )
+        if st.button("🔎 Analyze why it didn't hit", type="primary", key="pm_manual_go"):
+            manual = []
+            for r in pm_ed.itertuples():
+                if not str(r.Player or "").strip() or pd.isna(r.Line):
+                    continue
+                side = evaluate.parse_side(r.Pick)
+                actual = None if pd.isna(r.Actual) else float(r.Actual)
+                manual.append({"player": str(r.Player).strip(), "stat": str(r.Stat or "").strip(),
+                               "line": float(r.Line), "side": side, "actual": actual,
+                               "result": evaluate.grade_leg(r.Line, side, actual)})
+            if manual:
+                st.session_state["pm_legs"] = manual
             else:
-                with st.spinner("Reading the result…"):
-                    try:
-                        st.session_state["pm_legs"] = screenshot.extract_results(
-                            up_pm.getvalue(), up_pm.type or "image/png", api_key=key)
-                    except Exception as e:  # noqa: BLE001
-                        st.error(f"Couldn't read the screenshot: {e}")
+                st.warning("Add at least one leg with a player and a line.")
+    else:
+        up_pm = st.file_uploader(
+            "Upload a screenshot of the settled (graded) slip", type=["png", "jpg", "jpeg"],
+            key="pm_upload")
+        if up_pm is not None:
+            st.image(up_pm, width=320)
+            if st.button("🔎 Analyze why it didn't hit", type="primary"):
+                key = _anthropic_key()
+                if not key:
+                    st.warning("Screenshot reading needs an Anthropic API key. Add `ANTHROPIC_API_KEY` to "
+                               "`.streamlit/secrets.toml` or your environment, or use **Enter manually**.")
+                else:
+                    with st.spinner("Reading the result…"):
+                        try:
+                            st.session_state["pm_legs"] = screenshot.extract_results(
+                                up_pm.getvalue(), up_pm.type or "image/png", api_key=key)
+                        except Exception as e:  # noqa: BLE001
+                            st.error(f"Couldn't read the screenshot: {e}. "
+                                     "You can still use **Enter manually** above.")
 
     legs = st.session_state.get("pm_legs", [])
     if legs:
