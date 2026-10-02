@@ -9,6 +9,7 @@ import time
 import requests
 
 from config import (
+    PRIZEPICKS_LEAGUES_URL,
     PRIZEPICKS_PROJECTIONS_URL,
     PRIZEPICKS_HEADERS,
     PRIZEPICKS_LEAGUES,
@@ -23,6 +24,27 @@ def _index_included(included):
     for item in included:
         by_type.setdefault(item["type"], {})[item["id"]] = item.get("attributes", {})
     return by_type
+
+
+def league_ids(session: requests.Session, timeout=20):
+    """{canonical sport: league_id} from PrizePicks' live /leagues list.
+
+    Matches league names exactly against PRIZEPICKS_LEAGUES' keys, so derived
+    leagues ("NFL1H", "CBB2H") never shadow the full-game one. Any failure
+    falls back to the hardcoded ids.
+    """
+    ids = dict(PRIZEPICKS_LEAGUES)
+    try:
+        resp = session.get(PRIZEPICKS_LEAGUES_URL, headers=PRIZEPICKS_HEADERS, timeout=timeout)
+        if resp.status_code != 200:
+            return ids
+        for lg in resp.json().get("data", []):
+            name = (lg.get("attributes", {}).get("name") or "").strip().upper()
+            if name in ids and lg.get("id") is not None:
+                ids[name] = int(lg["id"])
+    except Exception:  # noqa: BLE001 - lookup is best-effort
+        pass
+    return ids
 
 
 def fetch_league(sport: str, league_id: int, session: requests.Session, timeout=20):
@@ -78,14 +100,13 @@ def fetch(sports, session=None, throttle=PRIZEPICKS_THROTTLE_SEC, log=lambda m: 
     """Fetch multiple sports. Returns (props, errors)."""
     session = session or requests.Session()
     out, errors = [], {}
-    first = True
+    sports = [s for s in sports if s in PRIZEPICKS_LEAGUES]
+    if not sports:
+        return out, errors
+    ids = league_ids(session)
     for sport in sports:
-        lid = PRIZEPICKS_LEAGUES.get(sport)
-        if lid is None:
-            continue
-        if not first:
-            time.sleep(throttle)  # avoid 429
-        first = False
+        time.sleep(throttle)  # avoid 429 (also spaces us from the /leagues call)
+        lid = ids[sport]
         try:
             rows = fetch_league(sport, lid, session)
             out.extend(rows)

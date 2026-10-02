@@ -60,11 +60,16 @@ PRIZEPICKS_THROTTLE_SEC = 2.5
 
 # PrizePicks league_id -> our canonical sport label. Only the "full game"
 # leagues; halves/quarters/periods are derived and excluded by default.
+# These are fallbacks: sources/prizepicks.py looks the ids up by name from
+# /leagues on each fetch, so a renumbered league still resolves.
+# CFB = college football, CBB = college (men's) basketball.
 PRIZEPICKS_LEAGUES = {
     "MLB": 2,
     "NBA": 7,
     "WNBA": 3,
     "NFL": 9,
+    "CFB": 15,
+    "CBB": 20,
     "NHL": 8,
     "PGA": 1,
     "TENNIS": 5,
@@ -74,7 +79,7 @@ PRIZEPICKS_LEAGUES = {
 
 # Underdog tags each player with a sport_id string; map the common ones.
 # Filled lazily from the payload, but these are the labels we surface.
-SUPPORTED_SPORTS = ["MLB", "NBA", "WNBA", "NFL", "NHL", "SOCCER", "TENNIS", "PGA", "UFC"]
+SUPPORTED_SPORTS = ["MLB", "NBA", "WNBA", "CBB", "NFL", "CFB", "NHL", "SOCCER", "TENNIS", "PGA", "UFC"]
 
 # --- Stat distribution model -------------------------------------------
 
