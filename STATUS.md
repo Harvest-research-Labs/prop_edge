@@ -35,6 +35,8 @@
   projects from last season alone. Matchup-, minutes- and injury-blind, so it
   only prices lines the market doesn't anchor, plus the `own_prob` read.
   Needs a residential connection (stats.nba.com blocks datacenter IPs).
+- **WNBA** uses the same model and endpoint (LeagueID 10, single-year
+  seasons). In the offseason it projects from the season just finished.
 
 - **College football own-projection model (`model/cfb_stats.py`)** from the
   CollegeFootballData API: per-game passing/rushing/receiving rates (over team

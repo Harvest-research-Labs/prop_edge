@@ -41,7 +41,7 @@ def _key():
 
 
 def get_projectors(sports):
-    """Own per-player projection models (MLB, NBA, CFB, CBB) — mirrors app.py."""
+    """Own per-player projection models (MLB, NBA, WNBA, CFB, CBB) — mirrors app.py."""
     projectors = {}
     if "MLB" in sports:
         try:
@@ -60,6 +60,11 @@ def get_projectors(sports):
     if "NBA" in sports:
         try:
             projectors["NBA"] = nba_stats.load_projector()
+        except Exception:  # noqa: BLE001 - own model is optional
+            pass
+    if "WNBA" in sports:
+        try:
+            projectors["WNBA"] = nba_stats.load_projector(league="WNBA")
         except Exception:  # noqa: BLE001 - own model is optional
             pass
     if "CFB" in sports:

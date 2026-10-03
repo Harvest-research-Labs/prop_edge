@@ -158,6 +158,11 @@ def get_projectors(sports):
             projectors["NBA"] = nba_stats.load_projector()
         except Exception:  # noqa: BLE001 - own model is optional
             pass
+    if "WNBA" in sports:
+        try:
+            projectors["WNBA"] = nba_stats.load_projector(league="WNBA")
+        except Exception:  # noqa: BLE001 - own model is optional
+            pass
     if "CFB" in sports:
         try:
             projectors["CFB"] = cfb_stats.load_projector(api_key=_secret("CFBD_API_KEY"))

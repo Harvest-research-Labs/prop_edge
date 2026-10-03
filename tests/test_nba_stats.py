@@ -5,6 +5,9 @@ session serves them, so nothing touches the network.
 """
 import datetime
 
+import pytest
+import requests
+
 from config import canonical_stat
 from model import nba_stats
 from model.projections import annotate
@@ -20,18 +23,23 @@ def _row(name, gp, pts, reb, ast, fg3m=0, blk=0, stl=0, tov=0):
 class _Session:
     """Serves resultSets by (Season, LastNGames)."""
 
-    def __init__(self, by_key):
-        self.by_key, self.calls = by_key, []
+    def __init__(self, by_key, error_seasons=()):
+        self.by_key, self.calls, self.leagues = by_key, [], set()
+        self.error_seasons = error_seasons
 
     def get(self, url, params=None, headers=None, timeout=None):
         key = (params["Season"], params["LastNGames"])
         self.calls.append(key)
+        self.leagues.add(params["LeagueID"])
         rows = self.by_key.get(key, [])
+        failing = params["Season"] in self.error_seasons
         cols = list(rows[0].keys()) if rows else ["PLAYER_NAME", "GP"]
 
         class R:
             status_code = 200
-            def raise_for_status(self): pass
+            def raise_for_status(self):
+                if failing:
+                    raise requests.HTTPError("400 Client Error")
             def json(self_inner):
                 return {"resultSets": [{"headers": cols,
                                         "rowSet": [[r[c] for c in cols] for r in rows]}]}
@@ -111,3 +119,40 @@ def test_annotate_uses_nba_model_when_market_is_silent():
     assert row["mean_source"] == "own_model" and row["mean"] == 26.0
     assert 0 < row["hit_prob"] < 0.5                       # 30.5 is above a 26-ppg mean
     assert row["own_prob"] == row["hit_prob"]
+
+
+def test_wnba_season_is_the_calendar_year():
+    assert nba_stats.season_label(datetime.date(2026, 10, 3), "WNBA") == "2026"
+    assert nba_stats.season_label(datetime.date(2027, 2, 1), "WNBA") == "2027"
+    assert nba_stats.previous_season("2026") == "2025"
+
+
+def test_wnba_projector_queries_league_10():
+    s = _Session({
+        ("2026", 0): [_row("A'ja Wilson", 40, 1080, 440, 100, blk=90, stl=70)],
+        ("2026", 10): [_row("A'ja Wilson", 10, 300, 110, 25)],
+        ("2025", 0): [_row("A'ja Wilson", 40, 1000, 400, 90)],
+    })
+    proj = nba_stats.load_projector(session=s, today=datetime.date(2026, 10, 3), league="WNBA")
+    assert s.leagues == {"10"}
+    assert s.calls == [("2026", 0), ("2026", 10), ("2025", 0)]
+    m = proj("Aja Wilson", canonical_stat("Points"))         # apostrophe-insensitive
+    assert 27 < m < 30                                       # 27 ppg season, 30 last 10
+    assert proj("A'ja Wilson", canonical_stat("Fantasy Score")) > m
+
+
+def test_wnba_offseason_projects_from_last_season():
+    # Feb 2027: the 2027 season hasn't started (empty), so 2026 is the projection.
+    s = _Session({("2026", 0): [_row("Caitlin Clark", 20, 380, 100, 170, fg3m=60)]})
+    proj = nba_stats.load_projector(session=s, today=datetime.date(2027, 2, 1), league="WNBA")
+    assert s.calls == [("2027", 0), ("2026", 0)]
+    assert proj("Caitlin Clark", "points") == 19 and proj("Caitlin Clark", "3-pt made") == 3
+
+
+def test_unstarted_season_error_falls_back_but_last_season_error_raises():
+    s = _Session({("2025-26", 0): [_row("A", 10, 100, 10, 10)]}, error_seasons=("2026-27",))
+    proj = nba_stats.load_projector(session=s, today=datetime.date(2026, 10, 3))
+    assert proj("A", "points") == 10 and s.leagues == {"00"}
+    bad = _Session({}, error_seasons=("2026-27", "2025-26"))
+    with pytest.raises(requests.HTTPError):
+        nba_stats.load_projector(session=bad, today=datetime.date(2026, 10, 3))

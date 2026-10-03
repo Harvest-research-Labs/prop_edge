@@ -1,4 +1,4 @@
-"""Own projection model for NBA, from stats.nba.com's league-wide player stats.
+"""Own projection model for NBA and WNBA, from stats.nba.com's league-wide player stats.
 
 Three league-wide calls give per-player totals: this season, the last
 RECENT_GAMES games, and last season. Each player's per-game rate is this
@@ -10,6 +10,11 @@ season, when a player has only a handful of games.
 Like the MLB model it is matchup- and minutes-blind (no opponent, pace,
 injury or rotation adjustment), so it sits *below* the market-derived mean in
 priority: it fills gaps, it doesn't override a priced market.
+
+The WNBA lives on the same endpoint under LeagueID 10, with single-year
+season names ("2026") because its season runs May-October inside one year.
+The model, stat mapping and constants are shared; only the league id and the
+season naming differ.
 
 stats.nba.com refuses datacenter IPs and bare clients; it needs the browser
 headers below and works from a residential connection (same constraint as
@@ -43,24 +48,36 @@ SHRINK_K = 10
 RECENT_GAMES = 10
 RECENCY_K = 8
 
+LEAGUE_IDS = {"NBA": "00", "WNBA": "10"}
 
-def season_label(today=None):
-    """NBA season string for a date: Oct 2026 - Sep 2027 -> '2026-27'."""
+
+def season_label(today=None, league="NBA"):
+    """Season string for a date.
+
+    NBA: Oct 2026 - Sep 2027 -> '2026-27'.
+    WNBA: the calendar year, '2026'. Before May that season hasn't started, so
+    the pull comes back empty and the projection falls back to last season.
+    """
     today = today or datetime.date.today()
+    if league == "WNBA":
+        return str(today.year)
     start = today.year if today.month >= 10 else today.year - 1
     return f"{start}-{(start + 1) % 100:02d}"
 
 
 def previous_season(label):
+    """'2026-27' -> '2025-26'; '2026' -> '2025'."""
     start = int(label[:4]) - 1
+    if len(label) == 4:
+        return str(start)
     return f"{start}-{(start + 1) % 100:02d}"
 
 
-def _fetch(session, season, last_n=0, timeout=15):
+def _fetch(session, season, last_n=0, timeout=15, league_id="00"):
     """League-wide per-player season TOTALS as a list of {column: value} dicts."""
     params = {
         "Season": season, "SeasonType": "Regular Season", "PerMode": "Totals",
-        "MeasureType": "Base", "LastNGames": last_n, "LeagueID": "00",
+        "MeasureType": "Base", "LastNGames": last_n, "LeagueID": league_id,
         # stats.nba.com 400s unless every filter is present, even if blank.
         "College": "", "Conference": "", "Country": "", "DateFrom": "", "DateTo": "",
         "Division": "", "DraftPick": "", "DraftYear": "", "GameScope": "",
@@ -84,7 +101,7 @@ def box_totals(row):
     g = lambda k: row.get(k) or 0
     pts, reb, ast = g("PTS"), g("REB"), g("AST")
     blk, stl, tov = g("BLK"), g("STL"), g("TOV")
-    # PrizePicks/Underdog NBA fantasy scoring.
+    # PrizePicks/Underdog NBA and WNBA fantasy scoring.
     fantasy = pts + 1.2 * reb + 1.5 * ast + 3 * blk + 3 * stl - tov
     return {
         "points": pts,
@@ -162,13 +179,22 @@ def build_table(season_rows, recent_rows, last_season_rows):
     return table
 
 
-def load_projector(session=None, today=None):
-    """Return proj(player_name, canonical_stat, team=None, opp=None) -> per-game mean or None."""
+def load_projector(session=None, today=None, league="NBA"):
+    """Return proj(player_name, canonical_stat, team=None, opp=None) -> per-game mean or None.
+
+    `league` is "NBA" or "WNBA"."""
     session = session or requests.Session()
-    season = season_label(today)
-    season_rows = _fetch(session, season)
-    recent_rows = _fetch(session, season, last_n=RECENT_GAMES) if season_rows else []
-    table = build_table(season_rows, recent_rows, _fetch(session, previous_season(season)))
+    lid = LEAGUE_IDS[league]
+    season = season_label(today, league)
+    try:
+        season_rows = _fetch(session, season, league_id=lid)
+    except requests.HTTPError:
+        # A season that hasn't started may 4xx instead of returning no rows;
+        # the last-season call below still raises on a real failure.
+        season_rows = []
+    recent_rows = _fetch(session, season, last_n=RECENT_GAMES, league_id=lid) if season_rows else []
+    table = build_table(season_rows, recent_rows,
+                        _fetch(session, previous_season(season), league_id=lid))
 
     def proj(player_name, canonical_stat, team=None, opp=None):
         # team/opp accepted for the uniform projector signature; unused here.
