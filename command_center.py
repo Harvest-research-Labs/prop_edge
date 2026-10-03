@@ -14,7 +14,7 @@ import streamlit as st
 
 from sources import prizepicks, underdog
 from model.projections import annotate
-from model import mlb_stats, matchup, brain, recommend, screenshot, lottery
+from model import mlb_stats, nba_stats, matchup, brain, recommend, screenshot, lottery
 import storage
 from config import SUPPORTED_SPORTS
 from proedge_ui import (ranked_board, evaluate_slip, explain_board,
@@ -36,7 +36,7 @@ def _key():
 
 
 def get_projectors(sports):
-    """Own per-player projection models (MLB today) — mirrors app.py."""
+    """Own per-player projection models (MLB, NBA) — mirrors app.py."""
     projectors = {}
     if "MLB" in sports:
         try:
@@ -51,6 +51,11 @@ def get_projectors(sports):
                 return _a(stat, m, team, opp) if _a else m
             projectors["MLB"] = mlb_proj
         except Exception:  # noqa: BLE001
+            pass
+    if "NBA" in sports:
+        try:
+            projectors["NBA"] = nba_stats.load_projector()
+        except Exception:  # noqa: BLE001 - own model is optional
             pass
     return projectors
 

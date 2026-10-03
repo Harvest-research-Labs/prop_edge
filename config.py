@@ -117,6 +117,13 @@ STAT_SHAPES = {
     "steals": {"kind": "discrete"},
     "turnovers": {"kind": "discrete"},
     "fantasy score": {"kind": "normal", "cv": 0.28},
+    "blks+stls": {"kind": "discrete"},
+    "offensive rebounds": {"kind": "discrete"},
+    "free throws made": {"kind": "discrete"},
+    "3-pt attempted": {"kind": "discrete"},
+    "field goals made": {"kind": "normal", "cv": 0.30},
+    "fg attempted": {"kind": "normal", "cv": 0.25},
+    "two pointers made": {"kind": "normal", "cv": 0.35},
     # NFL
     "pass yards": {"kind": "normal", "cv": 0.30},
     "passing yards": {"kind": "normal", "cv": 0.30},
@@ -180,6 +187,14 @@ STAT_ALIASES = {
     "rebs+asts": "rebs+asts",
     "3-pointers made": "3-pt made",
     "3pt made": "3-pt made",
+    "3-pointers attempted": "3-pt attempted",
+    "3pt attempted": "3-pt attempted",
+    "blocks": "blocked shots",
+    "blocks+steals": "blks+stls",
+    "stls+blks": "blks+stls",
+    "fg made": "field goals made",
+    "field goals attempted": "fg attempted",
+    "2-pt made": "two pointers made",
 }
 
 

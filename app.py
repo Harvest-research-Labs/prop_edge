@@ -14,7 +14,7 @@ import streamlit as st
 
 from sources import prizepicks, underdog
 from model.projections import annotate
-from model import mlb_stats, backtest, evaluate, screenshot, recommend, matchup, lottery, brain
+from model import mlb_stats, nba_stats, backtest, evaluate, screenshot, recommend, matchup, lottery, brain
 import storage
 from config import SUPPORTED_SPORTS, canonical_stat
 
@@ -146,6 +146,11 @@ def get_projectors(sports):
                 return _a(stat, m, team, opp) if _a else m
 
             projectors["MLB"] = mlb_proj
+        except Exception:  # noqa: BLE001 - own model is optional
+            pass
+    if "NBA" in sports:
+        try:
+            projectors["NBA"] = nba_stats.load_projector()
         except Exception:  # noqa: BLE001 - own model is optional
             pass
     return projectors

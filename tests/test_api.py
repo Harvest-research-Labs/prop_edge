@@ -75,12 +75,18 @@ def test_project_stale_matchup_not_fabricated():
     assert j["status"] == "partial"
 
 
-def test_project_marks_missing_own_model():
+def test_project_marks_missing_own_model(monkeypatch):
+    # stats.nba.com unreachable -> no NBA own model; the pick must stay unpriced.
+    from api import core
+
+    def _down(*a, **k):
+        raise ConnectionError("stats.nba.com unreachable")
+    monkeypatch.setattr(core.nba_stats, "load_projector", _down)
     j = client.post("/project", json={"picks": [
         {"player": "Jalen Brunson", "stat": "Points", "sport": "NBA"}]}).json()
     _assert_envelope(j)
     m = j["data"]["means"][0]
-    assert m["mean"] is None and m["mean_source"] == "none"   # no NBA own model yet
+    assert m["mean"] is None and m["mean_source"] == "none"
     assert m["distribution"] in ("poisson", "normal")
     assert j["status"] == "partial"
 

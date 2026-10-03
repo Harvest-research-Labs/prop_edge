@@ -6,7 +6,7 @@ Unresolved / unsupported inputs are rejected or flagged, never fabricated.
 """
 import base64
 
-from config import canonical_stat  # noqa: F401 - kept for compatibility
+from config import canonical_stat
 from sources.base import devig_two_way
 from model.projections import over_prob
 from model import brain, recommend, screenshot
@@ -110,7 +110,7 @@ def svc_project(req):
             continue
         if proj:
             try:
-                m = proj(p.player, p.stat, p.team, p.opponent)
+                m = proj(p.player, canonical_stat(p.stat), p.team, p.opponent)
                 if m is not None:
                     mean, src = round(float(m), 3), "own_model"
             except Exception as ex:  # noqa: BLE001
@@ -121,10 +121,10 @@ def svc_project(req):
                       "mean": mean, "mean_source": src,
                       "distribution": core.distribution_for(p.stat)})
     if missing:
-        warnings.append("No own projection for some picks (only MLB has one today); "
+        warnings.append("No own projection for some picks (only MLB and NBA have one today); "
                         "the market mean is supplied via /price.")
     return _reply({"means": means}, status="partial" if missing else "ok",
-                  source="model.projections/mlb_stats/matchup", warnings=warnings)
+                  source="model.projections/mlb_stats/nba_stats/matchup", warnings=warnings)
 
 
 # ---- 4. price --------------------------------------------------------------
