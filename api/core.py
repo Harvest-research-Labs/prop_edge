@@ -9,7 +9,7 @@ import datetime
 
 from sources import prizepicks, underdog
 from model.projections import annotate
-from model import mlb_stats, matchup
+from model import mlb_stats, nba_stats, matchup
 import storage
 
 try:
@@ -58,7 +58,7 @@ def distribution_for(stat):
 
 
 def get_projectors(sports):
-    """Own per-player projection models (MLB today) — mirrors app.py."""
+    """Own per-player projection models (MLB, NBA) — mirrors app.py."""
     projectors = {}
     if "MLB" in sports:
         try:
@@ -73,6 +73,11 @@ def get_projectors(sports):
                 return _a(stat, m, team, opp) if _a else m
             projectors["MLB"] = mlb_proj
         except Exception:  # noqa: BLE001
+            pass
+    if "NBA" in sports:
+        try:
+            projectors["NBA"] = nba_stats.load_projector()
+        except Exception:  # noqa: BLE001 - own model is optional
             pass
     return projectors
 

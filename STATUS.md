@@ -29,12 +29,20 @@
   from `/leagues` (fallback ids in `config.py`). Priced off the market like
   NFL/NBA — no own college model yet.
 
+- **NBA own-projection model (`model/nba_stats.py`)** from stats.nba.com: this
+  season's per-game rates shrunk toward each player's last season (league
+  average for rookies), blended with the last 10 games. Before opening night it
+  projects from last season alone. Matchup-, minutes- and injury-blind, so it
+  only prices lines the market doesn't anchor, plus the `own_prob` read.
+  Needs a residential connection (stats.nba.com blocks datacenter IPs).
+
 ## Not done / next
 - Extend coverage to the brain itself (verdicts, candidate ranking, edge gating are
   pure functions and still untested).
 - **Runs local-only.** PrizePicks blocks datacenter IPs → won't work on Streamlit
   Cloud without a residential proxy. Data sources are undocumented, gray-area ToS.
-- Roadmap: NBA own-model, paid odds API, matchup-adjusted pitcher props.
+- Roadmap: paid odds API, matchup-adjusted pitcher props, NBA minutes/injury
+  and opponent adjustments.
 
 ## Run
 ```bash
