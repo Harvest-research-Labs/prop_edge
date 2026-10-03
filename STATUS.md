@@ -24,6 +24,11 @@
   Verdict badges also render in Best Plays + Quick 6.
 - Real-market-only edge gating, side-relative edge, anchor-zone ranking.
 
+- **College football (CFB) and college basketball (CBB)** in the Sports picker,
+  pulled from PrizePicks and Underdog. PrizePicks league ids are looked up live
+  from `/leagues` (fallback ids in `config.py`). Priced off the market like
+  NFL/NBA — no own college model yet.
+
 ## Not done / next
 - Extend coverage to the brain itself (verdicts, candidate ranking, edge gating are
   pure functions and still untested).
