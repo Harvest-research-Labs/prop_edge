@@ -43,6 +43,12 @@
   `.streamlit/secrets.toml`). Same-name players on different teams are left
   unprojected.
 
+- **College basketball own-projection model (`model/cbb_stats.py`)** from the
+  CollegeBasketballData API: per-game box-score rates (same stat mapping as
+  NBA) shrunk toward the player's last season; freshmen use their raw rate.
+  Off unless `CBBD_API_KEY` (or `CFBD_API_KEY`) is set. Same-name players on
+  different teams are left unprojected.
+
 ## Not done / next
 - Extend coverage to the brain itself (verdicts, candidate ranking, edge gating are
   pure functions and still untested).
@@ -57,5 +63,5 @@ pip install -r requirements.txt
 streamlit run app.py           # → http://localhost:8502
 ```
 `ANTHROPIC_API_KEY` (env or `.streamlit/secrets.toml`, gitignored) unlocks the AI
-brain and screenshot features; `CFBD_API_KEY` turns on the college football
-model. Everything else runs without them.
+brain and screenshot features; `CFBD_API_KEY` / `CBBD_API_KEY` turn on the college
+football / basketball models. Everything else runs without them.

@@ -79,7 +79,7 @@ def _fetch(session, season, last_n=0, timeout=15):
     return [dict(zip(cols, row)) for row in sets[0]["rowSet"]]
 
 
-def _totals(row):
+def box_totals(row):
     """Box-score totals -> canonical prop stats (matching config.canonical_stat)."""
     g = lambda k: row.get(k) or 0
     pts, reb, ast = g("PTS"), g("REB"), g("AST")
@@ -118,7 +118,7 @@ def _by_name(rows):
     for r in rows:
         gp = r.get("GP") or 0
         if gp > 0:
-            out[normalize_name(r.get("PLAYER_NAME"))] = (_totals(r), gp)
+            out[normalize_name(r.get("PLAYER_NAME"))] = (box_totals(r), gp)
     return out
 
 
