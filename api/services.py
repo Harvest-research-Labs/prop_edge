@@ -121,10 +121,10 @@ def svc_project(req):
                       "mean": mean, "mean_source": src,
                       "distribution": core.distribution_for(p.stat)})
     if missing:
-        warnings.append("No own projection for some picks (only MLB, NBA and CFB have one today); "
+        warnings.append("No own projection for some picks (only MLB, NBA, CFB and CBB have one today); "
                         "the market mean is supplied via /price.")
     return _reply({"means": means}, status="partial" if missing else "ok",
-                  source="model.projections/mlb_stats/nba_stats/cfb_stats/matchup", warnings=warnings)
+                  source="model.projections/mlb_stats/nba_stats/cfb_stats/cbb_stats/matchup", warnings=warnings)
 
 
 # ---- 4. price --------------------------------------------------------------
