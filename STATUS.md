@@ -36,6 +36,13 @@
   only prices lines the market doesn't anchor, plus the `own_prob` read.
   Needs a residential connection (stats.nba.com blocks datacenter IPs).
 
+- **College football own-projection model (`model/cfb_stats.py`)** from the
+  CollegeFootballData API: per-game passing/rushing/receiving rates (over team
+  games played) shrunk toward the player's last season. Off unless
+  `CFBD_API_KEY` is set (free key at collegefootballdata.com; env or
+  `.streamlit/secrets.toml`). Same-name players on different teams are left
+  unprojected.
+
 ## Not done / next
 - Extend coverage to the brain itself (verdicts, candidate ranking, edge gating are
   pure functions and still untested).
@@ -50,4 +57,5 @@ pip install -r requirements.txt
 streamlit run app.py           # → http://localhost:8502
 ```
 `ANTHROPIC_API_KEY` (env or `.streamlit/secrets.toml`, gitignored) unlocks the AI
-brain and screenshot features; everything else runs without it.
+brain and screenshot features; `CFBD_API_KEY` turns on the college football
+model. Everything else runs without them.

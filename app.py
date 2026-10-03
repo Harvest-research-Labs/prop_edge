@@ -14,20 +14,25 @@ import streamlit as st
 
 from sources import prizepicks, underdog
 from model.projections import annotate
-from model import mlb_stats, nba_stats, backtest, evaluate, screenshot, recommend, matchup, lottery, brain
+from model import mlb_stats, nba_stats, cfb_stats, backtest, evaluate, screenshot, recommend, matchup, lottery, brain
 import storage
 from config import SUPPORTED_SPORTS, canonical_stat
 
 
-def _anthropic_key():
-    """Anthropic key from Streamlit secrets or the environment (None if absent)."""
+def _secret(name):
+    """A key from Streamlit secrets or the environment (None if absent)."""
     try:
-        if "ANTHROPIC_API_KEY" in st.secrets:
-            return st.secrets["ANTHROPIC_API_KEY"]
+        if name in st.secrets:
+            return st.secrets[name]
     except Exception:  # noqa: BLE001 - no secrets.toml is fine
         pass
     import os
-    return os.environ.get("ANTHROPIC_API_KEY")
+    return os.environ.get(name)
+
+
+def _anthropic_key():
+    """Anthropic key from Streamlit secrets or the environment (None if absent)."""
+    return _secret("ANTHROPIC_API_KEY")
 
 
 def _stat_options(frame):
@@ -152,6 +157,11 @@ def get_projectors(sports):
         try:
             projectors["NBA"] = nba_stats.load_projector()
         except Exception:  # noqa: BLE001 - own model is optional
+            pass
+    if "CFB" in sports:
+        try:
+            projectors["CFB"] = cfb_stats.load_projector(api_key=_secret("CFBD_API_KEY"))
+        except Exception:  # noqa: BLE001 - own model is optional (needs CFBD_API_KEY)
             pass
     return projectors
 
