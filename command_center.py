@@ -14,7 +14,7 @@ import streamlit as st
 
 from sources import prizepicks, underdog
 from model.projections import annotate
-from model import mlb_stats, nba_stats, matchup, brain, recommend, screenshot, lottery
+from model import mlb_stats, nba_stats, cfb_stats, matchup, brain, recommend, screenshot, lottery
 import storage
 from config import SUPPORTED_SPORTS
 from proedge_ui import (ranked_board, evaluate_slip, explain_board,
@@ -26,17 +26,22 @@ st.set_page_config(page_title="ProEdge — Command Center", page_icon="🎯", la
 
 
 # ---------------------------------------------------------------- data (reused)
-def _key():
+def _secret(name):
+    """A key from Streamlit secrets or the environment (None if absent)."""
     try:
-        if "ANTHROPIC_API_KEY" in st.secrets:
-            return st.secrets["ANTHROPIC_API_KEY"]
-    except Exception:  # noqa: BLE001
+        if name in st.secrets:
+            return st.secrets[name]
+    except Exception:  # noqa: BLE001 - no secrets.toml is fine
         pass
-    return os.environ.get("ANTHROPIC_API_KEY")
+    return os.environ.get(name)
+
+
+def _key():
+    return _secret("ANTHROPIC_API_KEY")
 
 
 def get_projectors(sports):
-    """Own per-player projection models (MLB, NBA) — mirrors app.py."""
+    """Own per-player projection models (MLB, NBA, CFB) — mirrors app.py."""
     projectors = {}
     if "MLB" in sports:
         try:
@@ -56,6 +61,11 @@ def get_projectors(sports):
         try:
             projectors["NBA"] = nba_stats.load_projector()
         except Exception:  # noqa: BLE001 - own model is optional
+            pass
+    if "CFB" in sports:
+        try:
+            projectors["CFB"] = cfb_stats.load_projector(api_key=_secret("CFBD_API_KEY"))
+        except Exception:  # noqa: BLE001 - own model is optional (needs CFBD_API_KEY)
             pass
     return projectors
 

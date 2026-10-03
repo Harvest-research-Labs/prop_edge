@@ -9,7 +9,7 @@ import datetime
 
 from sources import prizepicks, underdog
 from model.projections import annotate
-from model import mlb_stats, nba_stats, matchup
+from model import mlb_stats, nba_stats, cfb_stats, matchup
 import storage
 
 try:
@@ -58,7 +58,7 @@ def distribution_for(stat):
 
 
 def get_projectors(sports):
-    """Own per-player projection models (MLB, NBA) — mirrors app.py."""
+    """Own per-player projection models (MLB, NBA, CFB) — mirrors app.py."""
     projectors = {}
     if "MLB" in sports:
         try:
@@ -78,6 +78,11 @@ def get_projectors(sports):
         try:
             projectors["NBA"] = nba_stats.load_projector()
         except Exception:  # noqa: BLE001 - own model is optional
+            pass
+    if "CFB" in sports:
+        try:
+            projectors["CFB"] = cfb_stats.load_projector()
+        except Exception:  # noqa: BLE001 - own model is optional (needs CFBD_API_KEY)
             pass
     return projectors
 
