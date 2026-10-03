@@ -6,6 +6,7 @@ rebounds / shooting splits); a fake session serves them.
 import datetime
 
 import pytest
+import requests
 
 from config import canonical_stat
 from model import cbb_stats
@@ -23,16 +24,20 @@ def _row(name, team, games, pts, reb, ast, fg3m=0, blk=0, stl=0, tov=0):
 
 
 class _Session:
-    def __init__(self, by_season):
+    def __init__(self, by_season, error_seasons=()):
         self.by_season, self.calls, self.auth = by_season, [], None
+        self.error_seasons = error_seasons
 
     def get(self, url, params=None, headers=None, timeout=None):
         self.calls.append(params["season"])
         self.auth = headers.get("Authorization")
         data = self.by_season.get(params["season"], [])
+        failing = params["season"] in self.error_seasons
 
         class R:
-            def raise_for_status(self): pass
+            def raise_for_status(self):
+                if failing:
+                    raise requests.HTTPError("400 Client Error")
             def json(self_inner): return data
         return R()
 
@@ -104,3 +109,15 @@ def test_annotate_uses_cbb_model_when_market_is_silent():
     row = annotate([prop], projectors={"CBB": proj})[0]
     assert row["mean_source"] == "own_model" and row["mean"] == 20.0
     assert 0 < row["hit_prob"] < 0.5
+
+
+def test_unstarted_season_error_falls_back_to_last_season():
+    s = _Session({2026: [_row("Guard", "UConn", 30, 300, 60, 90)]}, error_seasons=(2027,))
+    proj = cbb_stats.load_projector(api_key="k", session=s, today=datetime.date(2026, 10, 3))
+    assert proj("Guard", "points") == 10
+
+
+def test_last_season_error_still_raises():
+    s = _Session({}, error_seasons=(2026, 2027))
+    with pytest.raises(requests.HTTPError):
+        cbb_stats.load_projector(api_key="bad", session=s, today=datetime.date(2026, 10, 3))

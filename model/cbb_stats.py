@@ -138,7 +138,13 @@ def load_projector(api_key=None, session=None, today=None):
         raise RuntimeError("CBBD_API_KEY not set; college basketball model is off")
     session = session or requests.Session()
     year = season_year(today)
-    table = build_table(_fetch(session, year, api_key), _fetch(session, year - 1, api_key))
+    try:
+        current = _fetch(session, year, api_key)
+    except requests.HTTPError:
+        # A season that hasn't tipped off may 4xx instead of returning []; the
+        # last-season call below still raises on a real (e.g. auth) failure.
+        current = []
+    table = build_table(current, _fetch(session, year - 1, api_key))
 
     def proj(player_name, canonical_stat, team=None, opp=None):
         # team/opp accepted for the uniform projector signature; unused here.
