@@ -10,11 +10,44 @@ import requests
 
 from config import (
     PRIZEPICKS_LEAGUES_URL,
+    PRIZEPICKS_PARTNER_LEAGUES_URL,
     PRIZEPICKS_PROJECTIONS_URL,
+    PRIZEPICKS_PARTNER_URL,
     PRIZEPICKS_HEADERS,
     PRIZEPICKS_LEAGUES,
     PRIZEPICKS_THROTTLE_SEC,
 )
+
+
+def _get_first_ok(session, urls, params, timeout, retries=3):
+    """GET the first url that answers 200, across the given hosts.
+
+    partner-api is listed first because api.prizepicks.com is behind a captcha
+    wall (403). A 429 (rate limit) is retried on the same host with a short
+    backoff that honours Retry-After, since the large per-league payload trips
+    PrizePicks' limiter when requests bunch up. Returns the 200 response, or the
+    last non-200 response, or raises on total unreachability.
+    """
+    last_resp = None
+    last_err = None
+    for url in urls:
+        for attempt in range(retries):
+            try:
+                resp = session.get(url, params=params, headers=PRIZEPICKS_HEADERS, timeout=timeout)
+            except requests.RequestException as e:
+                last_err = str(e)
+                break  # network error on this host -> try the next host
+            last_resp = resp
+            if resp.status_code == 200:
+                return resp
+            if resp.status_code == 429 and attempt < retries - 1:
+                wait = float(resp.headers.get("Retry-After") or 0) or (2.0 * (attempt + 1))
+                time.sleep(min(wait, 10.0))
+                continue
+            break  # non-retryable status on this host -> try the next host
+    if last_resp is not None:
+        return last_resp
+    raise RuntimeError(f"PrizePicks unreachable: {last_err}")
 from sources.base import Prop
 
 
@@ -35,7 +68,12 @@ def league_ids(session: requests.Session, timeout=20):
     """
     ids = dict(PRIZEPICKS_LEAGUES)
     try:
-        resp = session.get(PRIZEPICKS_LEAGUES_URL, headers=PRIZEPICKS_HEADERS, timeout=timeout)
+        resp = _get_first_ok(
+            session,
+            (PRIZEPICKS_PARTNER_LEAGUES_URL, PRIZEPICKS_LEAGUES_URL),
+            params=None,
+            timeout=timeout,
+        )
         if resp.status_code != 200:
             return ids
         for lg in resp.json().get("data", []):
@@ -49,14 +87,15 @@ def league_ids(session: requests.Session, timeout=20):
 
 def fetch_league(sport: str, league_id: int, session: requests.Session, timeout=20):
     """Fetch and normalize all projections for one PrizePicks league."""
-    resp = session.get(
-        PRIZEPICKS_PROJECTIONS_URL,
-        params={"league_id": league_id, "per_page": 1000, "single_stat": "true"},
-        headers=PRIZEPICKS_HEADERS,
+    params = {"league_id": league_id, "per_page": 1000, "single_stat": "true"}
+    resp = _get_first_ok(
+        session,
+        (PRIZEPICKS_PARTNER_URL, PRIZEPICKS_PROJECTIONS_URL),
+        params=params,
         timeout=timeout,
     )
     if resp.status_code != 200:
-        raise RuntimeError(f"PrizePicks {sport} HTTP {resp.status_code}")
+        raise RuntimeError(f"PrizePicks {sport} HTTP {resp.status_code} (partner-api + api both refused)")
     data = resp.json()
     included = _index_included(data.get("included", []))
     players = included.get("new_player", {})

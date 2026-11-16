@@ -280,7 +280,7 @@ st.sidebar.title("🧠 Smarter Betting")
 st.sidebar.caption("PropEdge · AI brain for PrizePicks & Underdog")
 
 sports = st.sidebar.multiselect(
-    "Sports", SUPPORTED_SPORTS, default=["MLB"],
+    "Sports", SUPPORTED_SPORTS, default=["NFL"],
     help="Sports with live games will return props; off-season ones come back empty.",
 )
 col_a, col_b = st.sidebar.columns(2)
@@ -299,8 +299,18 @@ st.session_state["slate_sports"] = tuple(sports)
 with st.spinner("Fetching live lines…"):
     df, errors, logs = load_props(tuple(sports), use_pp, use_ud)
 
-for src, msg in errors.items():
-    st.sidebar.error(f"{src}: {msg}")
+if errors and df.empty:
+    # Nothing came back at all — surface the real reason loudly.
+    for src, msg in errors.items():
+        st.sidebar.error(f"{src}: {msg}")
+elif errors:
+    # One book responded, another is rate-limited/blocked. The board still has
+    # data, so keep it calm: note which book is missing without a red alarm.
+    missing = sorted({src.split("/")[0] for src in errors})
+    st.sidebar.warning(
+        f"Showing available lines. Temporarily unavailable: {', '.join(missing)} "
+        "(rate-limited or blocked — it rejoins automatically)."
+    )
 if logs:
     st.sidebar.caption("  \n".join(logs))
 
