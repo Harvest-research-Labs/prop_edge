@@ -227,9 +227,10 @@ _SYSTEM = (
     "Your job is to reason about these prices like a sharp, risk-aware bettor and "
     "decide which are genuinely smart plays. Rules you MUST follow:\n"
     "1. Reason ONLY about the plays provided. Never invent a player, prop, line, "
-    "or statistic. You may reference general sports knowledge (role, pace, "
-    "usage, injuries, matchup difficulty) but never state a specific fabricated "
-    "number as fact.\n"
+    "or statistic. You may reason about general role, pace, usage and matchup "
+    "difficulty, but you have NO injury, lineup, news or weather feed — so never "
+    "assert a specific injury status, who will start, a roster move, a weather "
+    "condition, or 'reports say' claims. Stick to the numbers you were given.\n"
     "2. A large model edge (>20%) usually means the model is blind to news the "
     "market has priced in — treat huge edges with suspicion, not excitement.\n"
     "3. Demons are deliberately hard (juiced) lines with big payouts; Goblins are "
@@ -365,12 +366,73 @@ def get_take(rows, api_key=None, n_plays=10):
         try:
             take = ai_take(rows, api_key, n_plays=n_plays)
             take["note"] = None
-            return take
         except Exception as e:  # noqa: BLE001 — degrade, don't crash the board
             take = heuristic_take(rows, n_plays=n_plays)
             take["note"] = f"AI brain unavailable ({e}); showing the heuristic brain."
-            return take
-    take = heuristic_take(rows, n_plays=n_plays)
-    take["note"] = ("Add an ANTHROPIC_API_KEY to unlock the AI brain — it reasons "
-                    "over these same numbers in natural language.")
+    else:
+        take = heuristic_take(rows, n_plays=n_plays)
+        take["note"] = ("Add an ANTHROPIC_API_KEY to unlock the AI brain — it reasons "
+                        "over these same numbers in natural language.")
+    # Directive §8: flag any prose claim ProEdge has no feed to back.
+    return guard_take_claims(take)
+
+
+# ----------------------------------------------------------------------------
+# Fabrication guard (directive §8): ProEdge has no injury/lineup/news/weather
+# feed, so any such claim in the AI's prose is unverifiable. This scans the free
+# text and flags those specific categories — it is a disclosure aid, not a
+# general hallucination detector, and is intentionally narrow to avoid false
+# positives (e.g. it never trips on "probable outcome" or "usage").
+# ----------------------------------------------------------------------------
+import re as _re
+
+_UNSUPPORTED_CLAIMS = {
+    "injury/availability": _re.compile(
+        r"\b(injur\w+|questionable|doubtful|game[- ]time decision|gtd|ruled out|"
+        r"out with|out tonight|out for|did not play|dnp|load management|sidelined|"
+        r"inactive|concussion|ankle|knee|hamstring|groin|shoulder|quad|calf|wrist)\b",
+        _re.I,
+    ),
+    "lineup/role news": _re.compile(
+        r"\b(benched|will start|starting lineup|out of the lineup|"
+        r"did not start|scratched|promoted to start\w*|minutes restriction)\b",
+        _re.I,
+    ),
+    "weather": _re.compile(r"\b(weather|windy|rainout|snow[- ]out|high winds)\b", _re.I),
+    "unsourced report": _re.compile(
+        r"\b(reports? say|sources? say|per report|according to report|expected to (play|return|sit))\b",
+        _re.I,
+    ),
+}
+
+
+def scan_unsupported_claims(text):
+    """Return the sorted category labels of unverifiable claims found in `text`.
+
+    Categories are ones ProEdge has no data feed for (injury/lineup/weather/news).
+    Empty list means nothing flagged.
+    """
+    if not text:
+        return []
+    found = [label for label, rx in _UNSUPPORTED_CLAIMS.items() if rx.search(str(text))]
+    return sorted(found)
+
+
+def _take_prose(take):
+    """All free-text fields of a take, for claim scanning."""
+    parts = [take.get("headline", ""), take.get("strategy", "")]
+    parts += [p.get("rationale", "") for p in take.get("plays", []) or []]
+    slip = take.get("slip") or {}
+    parts.append(slip.get("rationale", ""))
+    return "\n".join(p for p in parts if p)
+
+
+def guard_take_claims(take):
+    """Attach a `claim_flags` list to the take for any unverifiable prose claims.
+
+    Non-destructive: the AI's reasoning is kept, but the UI can warn the user that
+    it names things ProEdge can't verify. Returns the same take, mutated.
+    """
+    flags = scan_unsupported_claims(_take_prose(take))
+    take["claim_flags"] = flags
     return take

@@ -393,6 +393,13 @@ with tab_brain:
             unsafe_allow_html=True)
         if take.get("note"):
             st.caption(f"ℹ️ {take['note']}")
+        if take.get("claim_flags"):
+            st.warning(
+                "⚠️ The AI's notes mention "
+                f"{', '.join(take['claim_flags'])} — ProEdge has no feed for these, "
+                "so treat such claims as unverified. The projections and probabilities "
+                "are unaffected (they come only from the priced board)."
+            )
 
         if take.get("headline"):
             st.markdown(f"#### {take['headline']}")
