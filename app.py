@@ -15,6 +15,7 @@ import streamlit as st
 from sources import prizepicks, underdog, sportsgameodds
 from model.projections import annotate
 from model import mlb_stats, nba_stats, cfb_stats, cbb_stats, backtest, evaluate, screenshot, recommend, matchup, lottery, brain
+from model.board import source_health, enabled_books
 import storage
 from config import SUPPORTED_SPORTS, canonical_stat, SGO_API_KEY
 
@@ -328,6 +329,15 @@ elif errors:
     )
 if logs:
     st.sidebar.caption("  \n".join(logs))
+
+# Source health: make "nothing showing up" legible — per-book line counts, so an
+# empty or blocked source is visible instead of a silent blank board.
+_health = source_health(df, enabled_books(use_pp, use_ud, use_sgo), errors)
+if _health:
+    _icon = {"ok": "🟢", "empty": "⚪️", "error": "🔴"}
+    st.sidebar.markdown("**Source health**")
+    for h in _health:
+        st.sidebar.caption(f"{_icon.get(h['status'], '•')} {h['book']}: {h['detail']}")
 
 if df.empty:
     st.warning("No props returned. Off-season sport, or the book blocked the request.")
