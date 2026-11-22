@@ -15,12 +15,16 @@ import os
 PRIZEPICKS_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Origin": "https://app.prizepicks.com",
     "Referer": "https://app.prizepicks.com/",
+    "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"macOS"',
+    "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-site",
 }
@@ -39,7 +43,13 @@ UNDERDOG_HEADERS = {
     "Referer": "https://app.underdogsports.com/",
 }
 
+# api.prizepicks.com now sits behind a DataDome/captcha wall and answers 403 to
+# server requests, so partner-api.prizepicks.com is the PRIMARY host: it serves
+# the same JSON:API payload without the bot wall. The api.* hosts stay only as a
+# last-ditch fallback in case the partner host ever changes.
+PRIZEPICKS_PARTNER_URL = "https://partner-api.prizepicks.com/projections"
 PRIZEPICKS_PROJECTIONS_URL = "https://api.prizepicks.com/projections"
+PRIZEPICKS_PARTNER_LEAGUES_URL = "https://partner-api.prizepicks.com/leagues"
 PRIZEPICKS_LEAGUES_URL = "https://api.prizepicks.com/leagues"
 # Underdog retires old API versions with HTTP 426 (Upgrade Required). We try
 # the newest first and fall back; override with UNDERDOG_LINES_URL env var.

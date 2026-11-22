@@ -109,6 +109,14 @@ def _heuristic_verdict(c):
     edge = c["edge"]
     flavor = c["flavor"]
 
+    # Unpriced legs (no market mean, no own-model rate) arrive as NaN/None.
+    # Never guess a verdict for them — say so.
+    if p is None or p != p:
+        return "THIN", 0, "Unpriced line — no market or model probability available."
+    p = min(1.0, max(0.0, float(p)))
+    if edge is not None and edge != edge:
+        edge = None
+
     # Demons are deliberately-juiced (hard) lines: big payout, poor probability.
     if flavor == "demon":
         if p >= 0.5:
@@ -152,8 +160,12 @@ def leg_verdict(prob, flavor="standard", edge=None):
     passed when it reflects a real market price. Returns (verdict, confidence,
     rationale) so other tabs (e.g. Best Plays) can badge legs with the same
     brain logic the Smart Board uses."""
+    try:
+        prob = float(prob) if prob is not None else float("nan")
+    except (TypeError, ValueError):
+        prob = float("nan")
     return _heuristic_verdict({
-        "model_prob": float(prob), "edge": edge, "flavor": flavor or "standard"})
+        "model_prob": prob, "edge": edge, "flavor": flavor or "standard"})
 
 
 def heuristic_take(rows, n_plays=10, slip_n=4):
