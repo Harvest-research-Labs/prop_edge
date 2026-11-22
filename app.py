@@ -12,11 +12,11 @@ from io import BytesIO
 import pandas as pd
 import streamlit as st
 
-from sources import prizepicks, underdog
+from sources import prizepicks, underdog, sportsgameodds
 from model.projections import annotate
 from model import mlb_stats, nba_stats, cfb_stats, cbb_stats, backtest, evaluate, screenshot, recommend, matchup, lottery, brain
 import storage
-from config import SUPPORTED_SPORTS, canonical_stat
+from config import SUPPORTED_SPORTS, canonical_stat, SGO_API_KEY
 
 
 def _secret(name):
@@ -173,9 +173,15 @@ def get_projectors(sports):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def load_props(sports, use_pp, use_ud):
-    """Fetch both books, annotate with the model, persist a snapshot."""
+def load_props(sports, use_pp, use_ud, use_sgo=False):
+    """Fetch the enabled sources, annotate with the model, persist a snapshot."""
     props, errors, logs = [], {}, []
+    if use_sgo:
+        # SportsGameOdds serves PrizePicks/Underdog lines via a documented API.
+        # It is a drop-in alternate source; turn the scrapers off to compare.
+        sg, e = sportsgameodds.fetch(sports, log=logs.append)
+        props += sg
+        errors.update(e)
     if use_pp:
         pp, e = prizepicks.fetch(sports, log=logs.append)
         props += pp
@@ -286,6 +292,15 @@ sports = st.sidebar.multiselect(
 col_a, col_b = st.sidebar.columns(2)
 use_pp = col_a.checkbox("PrizePicks", value=True)
 use_ud = col_b.checkbox("Underdog", value=True)
+# SportsGameOdds appears only when a key is configured (otherwise it is off and
+# invisible). It is a licensed-feed alternative to the scrapers; default off.
+use_sgo = False
+if SGO_API_KEY:
+    use_sgo = st.sidebar.checkbox(
+        "SportsGameOdds (beta)", value=False,
+        help="Pull PrizePicks/Underdog lines from SportsGameOdds instead of scraping. "
+             "Turn the scrapers off to compare feeds.",
+    )
 
 if st.sidebar.button("🔄 Refresh lines", use_container_width=True):
     load_props.clear()
@@ -297,7 +312,7 @@ if not sports:
 st.session_state["slate_sports"] = tuple(sports)
 
 with st.spinner("Fetching live lines…"):
-    df, errors, logs = load_props(tuple(sports), use_pp, use_ud)
+    df, errors, logs = load_props(tuple(sports), use_pp, use_ud, use_sgo)
 
 if errors and df.empty:
     # Nothing came back at all — surface the real reason loudly.

@@ -254,3 +254,34 @@ def stat_shape(stat_label: str) -> dict:
         if key in s and (best is None or len(key) > len(best[0])):
             best = (key, shape)
     return best[1] if best else DEFAULT_STAT
+
+
+# --- SportsGameOdds (optional licensed-ish feed) -----------------------
+# Dormant unless SGO_API_KEY is set (env or .streamlit/secrets.toml). It serves
+# PrizePicks/Underdog projection lines via a documented API. We build the adapter
+# now so it can be validated on the free tier the moment a key exists; without a
+# key the source is silently off (no network, no error). See docs/DATA_FEED_DECISION.md.
+import os as _os
+
+SGO_BASE_URL = "https://api.sportsgameodds.com/v2"
+SGO_API_KEY = _os.getenv("SGO_API_KEY", "")
+
+# our canonical sport -> SportsGameOdds leagueID
+SGO_LEAGUE_MAP = {
+    "NBA": "NBA",
+    "WNBA": "WNBA",
+    "NFL": "NFL",
+    "MLB": "MLB",
+    "NHL": "NHL",
+    "CBB": "NCAAB",
+    "CFB": "NCAAF",
+    "SOCCER": "EPL",   # SGO uses per-competition league ids; EPL as the default probe
+}
+# SGO leagueID -> our canonical sport (reverse, first match wins)
+SGO_LEAGUE_TO_SPORT = {v: k for k, v in SGO_LEAGUE_MAP.items()}
+
+# SGO bookmakerID -> our book label
+SGO_BOOKMAKERS = {
+    "prizepicks": "PrizePicks",
+    "underdog": "Underdog",
+}
